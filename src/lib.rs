@@ -1,6 +1,6 @@
-#[cfg(test)]
+pub mod structures;
+pub mod memory;
+
 mod tests {
-    #[test]
-    fn it_works() {
-    }
+   
 }
