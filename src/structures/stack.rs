@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::ptr;
 use std::fmt::Debug;
+use std::mem;
 
 #[derive(Debug)]
 pub struct Stack<T: Send + Sync + Debug> {
@@ -46,7 +47,28 @@ impl<T: Send + Sync + Debug> Stack<T> {
     }
 
     pub fn pop(&mut self) -> Option<T> {
-        
+        loop {
+            if let Ok(node) = self.try_pop() {
+                if node.is_null() {
+                    return None;
+                } else {
+                    unsafe {
+                        return ptr::replace(node, Node {
+                            data: None,
+                            next: AtomicPtr::default()
+                        }).data;
+                    }
+                }
+            }
+        }
+    }
+
+    fn try_pop(&mut self) -> Result<*mut Node<T>, *mut Node<T>> {
+        let old_head = self.head.load(Ordering::Acquire);
+        unsafe {
+            let new_head = (*old_head).next.load(Ordering::Acquire);
+            self.head.compare_exchange_weak(old_head, new_head, Ordering::AcqRel, Ordering::Acquire)
+        }
     }
 }
 
