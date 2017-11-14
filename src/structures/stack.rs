@@ -57,6 +57,7 @@ impl<T: Send + Sync + Debug> Stack<T> {
                             data: None,
                             next: AtomicPtr::default()
                         }).data;
+                            // Memory leak here, Node is never removed
                     }
                 }
             }
@@ -65,6 +66,10 @@ impl<T: Send + Sync + Debug> Stack<T> {
 
     fn try_pop(&mut self) -> Result<*mut Node<T>, *mut Node<T>> {
         let old_head = self.head.load(Ordering::Acquire);
+        if old_head.is_null() {
+            return Ok(old_head);    
+                // If null, return early to avoid accessing
+        }
         unsafe {
             let new_head = (*old_head).next.load(Ordering::Acquire);
             self.head.compare_exchange_weak(old_head, new_head, Ordering::AcqRel, Ordering::Acquire)
@@ -92,5 +97,25 @@ mod tests {
             let next_val = (*(*stack.head.load(Ordering::Relaxed)).next.load(Ordering::Relaxed)).data;
             assert_eq!(next_val, Some(3));
         }
+    }
+
+    #[test]
+    fn test_pop_single_threaded() {
+        let mut stack : Stack<u8> = Stack::new();
+
+        stack.push(1);
+        println!("{:?}", stack);
+        stack.push(2);
+        println!("{:?}", stack);
+        stack.push(3);
+        println!("{:?}", stack);
+
+        assert_eq!(stack.pop(), Some(3));
+        println!("{:?}", stack);
+        assert_eq!(stack.pop(), Some(2));
+        println!("{:?}", stack);
+        assert_eq!(stack.pop(), Some(1));
+        println!("{:?}", stack);
+        assert_eq!(stack.pop(), None);
     }
 }
