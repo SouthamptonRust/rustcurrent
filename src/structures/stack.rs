@@ -21,13 +21,14 @@ impl<T: Send + Sync + Debug> Stack<T> {
     }
 
     pub fn push(&mut self, val: T) {
+        // Create a new node on the heap, with a pointer to it
         let node = Box::into_raw(Box::new(Node {
             data: Some(val),
             next: AtomicPtr::default()
         }));
 
         loop {
-            if self.try_push(node) { // Create mut * to the node
+            if self.try_push(node) {
                 break;
             }
         };
@@ -42,6 +43,10 @@ impl<T: Send + Sync + Debug> Stack<T> {
             Ok(_) => true,
             Err(_) => false
         }
+    }
+
+    pub fn pop(&mut self) -> Option<T> {
+        
     }
 }
 
