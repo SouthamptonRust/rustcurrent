@@ -1,19 +1,25 @@
-pub struct Stack {
-    data: Vec<u8>
+use std::sync::atomic::AtomicPtr;
+
+pub struct Stack<T: Send + Sync> {
+    head: Option<AtomicPtr<Node<T>>>
 }
 
-impl Stack {
-    pub fn new() -> Stack {
+struct Node<T> {
+    data: T,
+    next: Option<AtomicPtr<Node<T>>>
+}
+
+impl<T: Send + Sync> Stack<T> {
+    pub fn new() -> Stack<T> {
         Stack {
-            data: Vec::new()
+            head: None
         }
     }
 
-    pub fn push(&mut self, val: u8) {
-        self.data.push(val);
-    } 
-
-    pub fn pop(&mut self) -> Option<u8> {
-        self.data.pop()
+    pub fn push(&mut self, val: T) {
+        let node = Node {
+            data: val,
+            next: Some(AtomicPtr::new(self.head))
+        };
     }
 }
