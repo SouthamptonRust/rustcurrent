@@ -5,6 +5,7 @@ use rand::distributions::{IndependentSample, Range};
 use rand::{ThreadRng, Rng};
 use rand;
 
+#[derive(Debug)]
 pub struct Exchanger<'a, T: Debug + Send + Sync + 'a> {
     slot: AtomicPtr<NodeAndTag<'a, T>>
 }
@@ -79,6 +80,7 @@ impl<'a, T: Debug + Send + Sync> Exchanger<'a, T> {
                                     Err(_) => { // We can't move back to empty, which means we were matched with!
                                         their_item = (*self.slot.load(Ordering::Acquire)).node;
                                         self.slot.store(NodeAndTag::default(), Ordering::Acquire);
+                                        println!("Exchanged!");
                                         return Ok(their_item.unwrap())
                                     }
                                 }
@@ -94,6 +96,7 @@ impl<'a, T: Debug + Send + Sync> Exchanger<'a, T> {
                                                     NodeAndTag::new_from_item(my_item, Status::Busy),
                                                     Ordering::AcqRel,
                                                     Ordering::Acquire).is_ok() {
+                            println!("Exchanged!");
                             return Ok(their_item.unwrap());
                         }
                     },
@@ -120,6 +123,7 @@ impl<'a, T: Debug + Sync + Send> NodeAndTag<'a, T> {
     }
 }
 
+#[derive(Debug)]
 pub struct EliminationVec<'a, T: Debug + Send + Sync + 'a> {
     exchangers: Vec<Exchanger<'a, T>>,
     duration: u64,

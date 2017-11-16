@@ -1,10 +1,12 @@
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::ptr;
 use std::fmt::Debug;
+use super::exchanger::EliminationVec;
 
 #[derive(Debug)]
-pub struct Stack<T: Send + Sync + Debug> {
-    head: AtomicPtr<Node<T>>
+pub struct Stack<'a, T: Send + Sync + Debug + 'a> {
+    head: AtomicPtr<Node<T>>,
+    elimination: EliminationVec<'a, T>
 }
 
 #[derive(Debug)]
@@ -13,10 +15,11 @@ pub struct Node<T: Debug> {
     next: AtomicPtr<Node<T>>
 }
 
-impl<T: Send + Sync + Debug> Stack<T> {
-    pub fn new() -> Stack<T> {
+impl<'a, T: Send + Sync + Debug + 'a> Stack<'a, T> {
+    pub fn new() -> Stack<'a, T> {
         Stack {
-            head: AtomicPtr::default()
+            head: AtomicPtr::default(),
+            elimination: EliminationVec::new(4, 500000000)
         }
     }
 
@@ -29,6 +32,9 @@ impl<T: Send + Sync + Debug> Stack<T> {
 
         loop {
             if self.try_push(node) {
+                break;
+            }
+            if self.elimination.visit(&val, 4).is_ok() {    // Heap allocate the values to send them through
                 break;
             }
         };
