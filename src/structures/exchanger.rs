@@ -1,6 +1,5 @@
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicPtr, Ordering};
-use std::ptr;
 use time;
 
 pub struct Exchanger<'a, T: Debug + Send + Sync + 'a> {
@@ -42,43 +41,78 @@ impl<'a, T: Debug + Send + Sync> Exchanger<'a, T> {
 
                 match status {
                     &Status::Empty => {
-                        let mut new_node_and_tag = Box::into_raw(Box::new(NodeAndTag {
-                            node: Some(my_item),
-                            tag: Status::Waiting
-                        }));
+                        // Try to set the Exchanger to Waiting status
+                        let mut new_node_and_tag = NodeAndTag::new_from_item(my_item, Status::Waiting);
                         match self.slot.compare_exchange_weak(
                                             node_and_tag, 
                                             new_node_and_tag, 
                                             Ordering::AcqRel, 
                                             Ordering::Acquire) {
                             Ok(_) => {
+                                // If we set to waiting, we wait for someone to swap with us!
                                 while time_bound > time::precise_time_ns() {
                                     node_and_tag = self.slot.load(Ordering::Acquire);
                                     their_item = (*node_and_tag).node;
+                                    // Check if someone matched with us by looking for the Busy tag
                                     match (*node_and_tag).tag {
                                         Status::Busy => {
-                                            new_node_and_tag = Box::into_raw(Box::new(NodeAndTag {
-                                                node: None,
-                                                tag: Status::Empty
-                                            }));
+                                            new_node_and_tag = NodeAndTag::default();
                                             self.slot.store(new_node_and_tag, Ordering::Acquire);
                                             return Ok(their_item.unwrap());
                                         },
-                                        _ => {}
+                                        _ => {} // Loop and try again
                                     }
 
                                 }
+                                // Once time runs out, we see if we can swap the exchanger back to empty to leave
+                                match self.slot.compare_exchange_weak(
+                                                            node_and_tag,
+                                                            NodeAndTag::default(),
+                                                            Ordering::AcqRel,
+                                                            Ordering::Acquire) {
+                                    Ok(_) => {  // Nothing has changed, we weren't matched :(
+                                        return Err(my_item)
+                                    },
+                                    Err(_) => { // We can't move back to empty, which means we were matched with!
+                                        their_item = (*self.slot.load(Ordering::Acquire)).node;
+                                        self.slot.store(NodeAndTag::default(), Ordering::Acquire);
+                                        return Ok(their_item.unwrap())
+                                    }
+                                }
                             },
                             Err(_) => {
-
+                                // Do nothing, try looping again
                             }
                         }
                     },
-                    &Status::Waiting => unimplemented!(),
-                    &Status::Busy => unimplemented!()
+                    &Status::Waiting => {
+                        if self.slot.compare_exchange_weak(
+                                                    node_and_tag,
+                                                    NodeAndTag::new_from_item(my_item, Status::Busy),
+                                                    Ordering::AcqRel,
+                                                    Ordering::Acquire).is_ok() {
+                            return Ok(their_item.unwrap());
+                        }
+                    },
+                    &Status::Busy => {} // Exchanger can't be used at the moment, so spin
                 }
             }
         }
-        Ok(my_item)
+        Err(my_item) // We timed out :(
+    }
+}
+
+impl<'a, T: Debug + Sync + Send> NodeAndTag<'a, T> {
+    fn default() -> *mut NodeAndTag<'a, T> {
+        Box::into_raw(Box::new(NodeAndTag {
+            node: None,
+            tag: Status::Empty
+        }))
+    }
+    fn new_from_item(item: &'a T, status: Status) -> *mut NodeAndTag<'a, T> {
+        Box::into_raw(Box::new(NodeAndTag {
+            node: Some(item),
+            tag: status
+        }))
     }
 }
