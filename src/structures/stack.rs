@@ -1,12 +1,10 @@
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::ptr;
 use std::fmt::Debug;
-use std::thread;
 
 #[derive(Debug)]
 pub struct Stack<T: Send + Sync + Debug> {
-    head: AtomicPtr<Node<T>>,
-    collision: Vec<AtomicPtr<ThreadInfo<T>>>
+    head: AtomicPtr<Node<T>>
 }
 
 #[derive(Debug)]
@@ -15,28 +13,10 @@ pub struct Node<T: Debug> {
     next: AtomicPtr<Node<T>>
 }
 
-#[derive(Debug)]
-enum Operation {
-    Push,
-    Pop,
-    None
-}
-
-#[derive(Debug)]
-pub struct ThreadInfo<T: Debug> {
-    node: Node<T>,
-    op: Operation
-}
-
 impl<T: Send + Sync + Debug> Stack<T> {
     pub fn new() -> Stack<T> {
-        let mut collision = Vec::with_capacity(50);
-        for _ in 0..50 {
-            collision.push(AtomicPtr::default());
-        }
         Stack {
-            head: AtomicPtr::default(),
-            collision
+            head: AtomicPtr::default()
         }
     }
 

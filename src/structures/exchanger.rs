@@ -1,6 +1,9 @@
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use time;
+use rand::distributions::{IndependentSample, Range};
+use rand::{ThreadRng, Rng};
+use rand;
 
 pub struct Exchanger<'a, T: Debug + Send + Sync + 'a> {
     slot: AtomicPtr<NodeAndTag<'a, T>>
@@ -114,5 +117,32 @@ impl<'a, T: Debug + Sync + Send> NodeAndTag<'a, T> {
             node: Some(item),
             tag: status
         }))
+    }
+}
+
+pub struct EliminationVec<'a, T: Debug + Send + Sync + 'a> {
+    exchangers: Vec<Exchanger<'a, T>>,
+    duration: u64,
+    rng: ThreadRng,
+    range: Range<usize>
+}
+
+impl<'a, T: Debug + Sync + Send> EliminationVec<'a, T> {
+    pub fn new(size: usize, duration: u64) -> EliminationVec<'a, T> {
+        let mut exchangers = Vec::with_capacity(size);
+        for _ in 0..size {
+            exchangers.push(Exchanger::new());
+        }
+        EliminationVec {
+            exchangers,
+            duration,
+            rng: rand::thread_rng(),
+            range: Range::new(0, size)
+        }
+    }
+
+    pub fn visit(&mut self, item: &'a T, range: usize) -> Result<&'a T, &'a T> {
+        let index = self.rng.gen_range(0, range);
+        self.exchangers[index].exchange(item, self.duration)
     }
 }
