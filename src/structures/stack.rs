@@ -1,11 +1,12 @@
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::ptr;
 use std::fmt::Debug;
-use std::mem;
+use std::thread;
 
 #[derive(Debug)]
 pub struct Stack<T: Send + Sync + Debug> {
-    head: AtomicPtr<Node<T>>
+    head: AtomicPtr<Node<T>>,
+    collision: Vec<AtomicPtr<ThreadInfo<T>>>
 }
 
 #[derive(Debug)]
@@ -14,10 +15,28 @@ pub struct Node<T: Debug> {
     next: AtomicPtr<Node<T>>
 }
 
+#[derive(Debug)]
+enum Operation {
+    Push,
+    Pop,
+    None
+}
+
+#[derive(Debug)]
+pub struct ThreadInfo<T: Debug> {
+    node: Node<T>,
+    op: Operation
+}
+
 impl<T: Send + Sync + Debug> Stack<T> {
     pub fn new() -> Stack<T> {
+        let mut collision = Vec::with_capacity(50);
+        for _ in 0..50 {
+            collision.push(AtomicPtr::default());
+        }
         Stack {
-            head: AtomicPtr::default()
+            head: AtomicPtr::default(),
+            collision
         }
     }
 
@@ -80,6 +99,7 @@ impl<T: Send + Sync + Debug> Stack<T> {
 mod tests {
     use super::Stack;
     use std::sync::atomic::Ordering;
+    use std::thread;
 
     #[test]
     fn test_push_single_threaded() {
@@ -117,5 +137,15 @@ mod tests {
         assert_eq!(stack.pop(), Some(1));
         println!("{:?}", stack);
         assert_eq!(stack.pop(), None);
+        assert_eq!(stack.pop(), None);
+    }
+
+    #[test]
+    fn test_thread_id() {
+        for i in 0..10 {
+            thread::spawn(|| {
+                println!("{:?}", thread::current().id());
+            });
+        }
     }
 }
