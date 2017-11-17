@@ -1,12 +1,12 @@
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::ptr;
 use std::fmt::Debug;
-use super::exchanger::EliminationVec;
+use std::collections::HashMap;
+use std::thread;
 
 #[derive(Debug)]
-pub struct Stack<'a, T: Send + Sync + Debug + 'a> {
-    head: AtomicPtr<Node<T>>,
-    elimination: EliminationVec<'a, T>
+pub struct Stack<T: Send + Sync + Debug> {
+    head: AtomicPtr<Node<T>>
 }
 
 #[derive(Debug)]
@@ -15,11 +15,10 @@ pub struct Node<T: Debug> {
     next: AtomicPtr<Node<T>>
 }
 
-impl<'a, T: Send + Sync + Debug + 'a> Stack<'a, T> {
-    pub fn new() -> Stack<'a, T> {
+impl<'a, T: Send + Sync + Debug> Stack<T> {
+    pub fn new() -> Stack<T> {
         Stack {
-            head: AtomicPtr::default(),
-            elimination: EliminationVec::new(4, 500000000)
+            head: AtomicPtr::default()
         }
     }
 
@@ -32,9 +31,6 @@ impl<'a, T: Send + Sync + Debug + 'a> Stack<'a, T> {
 
         loop {
             if self.try_push(node) {
-                break;
-            }
-            if self.elimination.visit(&val, 4).is_ok() {    // Heap allocate the values to send them through
                 break;
             }
         };
@@ -78,6 +74,33 @@ impl<'a, T: Send + Sync + Debug + 'a> Stack<'a, T> {
         unsafe {
             let new_head = (*old_head).next.load(Ordering::Acquire);
             self.head.compare_exchange_weak(old_head, new_head, Ordering::AcqRel, Ordering::Acquire)
+        }
+    }
+}
+
+struct EliminationLayer<T: Debug> {
+    operations: HashMap<thread::ThreadId, OpInfo<T>>,
+        // If we bound the number of threads, and preallocate the HashMap,
+        // it should be fine to access concurrently because rehashing will
+        // never happen, as guaranteed by the runtime.
+    collisions: Vec<Option<thread::ThreadId>>
+}
+
+struct OpInfo<T: Debug> {
+    operation: Option<OpType>,
+    node: *mut Node<T>
+}
+
+enum OpType {
+    Pop,
+    Push
+}
+
+impl<T: Debug> EliminationLayer<T> {
+    fn new(max_threads: usize, collision_size: usize) -> Self {
+        Self {
+            operations: HashMap::with_capacity(max_threads),
+            collisions: vec![None; collision_size]
         }
     }
 }
