@@ -3,10 +3,12 @@ use std::ptr;
 use std::fmt::Debug;
 use std::collections::HashMap;
 use std::thread;
+use std::time::Duration;
 
 #[derive(Debug)]
 pub struct Stack<T: Send + Sync + Debug> {
-    head: AtomicPtr<Node<T>>
+    head: AtomicPtr<Node<T>>,
+    elimination: EliminationLayer<T>
 }
 
 #[derive(Debug)]
@@ -18,7 +20,8 @@ pub struct Node<T: Debug> {
 impl<'a, T: Send + Sync + Debug> Stack<T> {
     pub fn new() -> Stack<T> {
         Stack {
-            head: AtomicPtr::default()
+            head: AtomicPtr::default(),
+            elimination: EliminationLayer::new(20, 10)
         }
     }
 
@@ -84,6 +87,7 @@ impl<T: Debug> Node<T> {
     }
 }
 
+#[derive(Debug)]
 struct EliminationLayer<T: Debug> {
     operations: HashMap<thread::ThreadId, AtomicPtr<OpInfo<T>>>,
         // If we bound the number of threads, and preallocate the HashMap,
@@ -116,10 +120,10 @@ impl<T: Debug> EliminationLayer<T> {
         }
     }
 
-    fn try_eliminate(&mut self, opinfo: OpInfo<T>) -> Result<T, OpInfo<T>> {
-        let my_info_ptr = Box::into_raw(Box::new(opinfo));
+    fn try_eliminate(&mut self, opinfo: OpInfo<T>) -> Result<Option<T>, OpInfo<T>> {
+        let my_info_ptr = Box::into_raw(Box::new(opinfo));  // Need to keep a copy of this pointer
         self.operations.entry(thread::current().id()).or_insert(AtomicPtr::default()).store(my_info_ptr, Ordering::Acquire);
-        let position = Self::choose_position();
+        let position = Self::choose_position();             
         let mut them = ptr::null_mut();
         
         loop {
@@ -130,25 +134,58 @@ impl<T: Debug> EliminationLayer<T> {
             }
         }
 
-        let mut their_info: Option<&AtomicPtr<OpInfo<T>>> = None;
+        let mut their_info_option: Option<&AtomicPtr<OpInfo<T>>> = None;
         unsafe {
             if (*them).is_none() {
-                return Err(opinfo);
+                return Err(ptr::read(my_info_ptr));
             }
-            their_info = self.operations.get(&ptr::read(them).unwrap());
-            if their_info.is_none() {
-                return Err(opinfo);
+            their_info_option = self.operations.get(&ptr::read(them).unwrap());
+            if their_info_option.is_none() {
+                return Err(ptr::read(my_info_ptr));
             }
-        }
-        
-        unsafe {
-            let their_op = ptr::read(their_info.unwrap().load(Ordering::Acquire));
-            let my_info = ptr::read(my_info_ptr);
-            if my_info.check_complimentary(their_op.operation.as_ref()) {
+            let their_atomic = their_info_option.unwrap();
+            let their_info_ptr = their_atomic.load(Ordering::Acquire);
+            let their_info = ptr::read(their_info_ptr);
 
+            let my_info = ptr::read(my_info_ptr);
+            if my_info.check_complimentary(their_info.operation.as_ref()) {
+                let my_atomic = self.operations.get(&thread::current().id()).unwrap();
+                if my_atomic.compare_exchange_weak(
+                                my_info_ptr, 
+                                OpInfo::new_none_as_pointer(my_info.node), 
+                                Ordering::AcqRel,
+                                Ordering::Acquire).is_ok() {
+                    if their_atomic.compare_exchange_weak(
+                                        their_info_ptr,
+                                        OpInfo::new_none_as_pointer(their_info.node),
+                                        Ordering::AcqRel,
+                                        Ordering::Acquire).is_ok() {
+                        return Ok(ptr::read(their_info.node).data);
+                    } else {
+                        // Can't swap, another elimination has happened
+                        return Err(ptr::read(my_info_ptr));
+                    }
+                } else {
+                    // We've already been eliminated, read the new value
+                    return Ok(self.operations.get(&thread::current().id()).and_then(|atomic| {
+                        ptr::read(ptr::read(atomic.load(Ordering::Acquire)).node).data
+                    }))
+                }
             }
+            thread::sleep(Duration::from_millis(500));
+            let my_atomic = self.operations.get(&thread::current().id()).unwrap();
+            if my_atomic.compare_exchange_weak(
+                            my_info_ptr,
+                            OpInfo::new_none_as_pointer(my_info.node),
+                            Ordering::AcqRel,
+                            Ordering::Acquire).is_err() {
+                return Ok(self.operations.get(&thread::current().id()).and_then(|atomic| {
+                    ptr::read(ptr::read(atomic.load(Ordering::Acquire)).node).data
+                }))
+            } else {
+                return Err(ptr::read(my_info_ptr))
+            }   
         }
-        Err(opinfo)
     }
 
     fn choose_position() -> usize {
@@ -168,6 +205,15 @@ impl<T: Debug> OpInfo<T> {
         Box::into_raw(Box::new({
             OpInfo {
                 operation: Some(op),
+                node
+            }
+        }))
+    }
+
+    fn new_none_as_pointer(node: *mut Node<T>) -> *mut Self {
+        Box::into_raw(Box::new({
+            OpInfo {
+                operation: None,
                 node
             }
         }))
