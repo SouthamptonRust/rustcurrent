@@ -4,9 +4,10 @@ use std::fmt::Debug;
 use std::collections::HashMap;
 use std::thread;
 use std::time::Duration;
+use std::cell::UnsafeCell;
 
 #[derive(Debug)]
-pub struct Stack<T: Send + Sync + Debug> {
+pub struct Stack<T: Send + Debug> {
     head: AtomicPtr<Node<T>>,
     elimination: EliminationLayer<T>
 }
@@ -17,7 +18,7 @@ pub struct Node<T: Debug> {
     next: AtomicPtr<Node<T>>
 }
 
-impl<'a, T: Send + Sync + Debug> Stack<T> {
+impl<'a, T: Send + Debug> Stack<T> {
     pub fn new() -> Stack<T> {
         Stack {
             head: AtomicPtr::default(),
@@ -25,18 +26,21 @@ impl<'a, T: Send + Sync + Debug> Stack<T> {
         }
     }
 
-    pub fn push(&mut self, val: T) {
+    pub fn push(&self, val: T) {
         // Create a new node on the heap, with a pointer to it
         let node = Node::new_as_pointer(val);
-
+        let opinfo_ptr = OpInfo::new_as_pointer(node, OpType::Push);
         loop {
             if self.try_push(node) {
+                break;
+            }
+            if self.elimination.try_eliminate(opinfo_ptr).is_ok() {
                 break;
             }
         };
     }
 
-    fn try_push(&mut self, node: *mut Node<T>) -> bool {
+    fn try_push(&self, node: *mut Node<T>) -> bool {
         let old_head = self.head.load(Ordering::Acquire);
         unsafe {
             (*node).next = AtomicPtr::new(old_head);
@@ -47,7 +51,8 @@ impl<'a, T: Send + Sync + Debug> Stack<T> {
         }
     }
 
-    pub fn pop(&mut self) -> Option<T> {
+    pub fn pop(&self) -> Option<T> {
+        let op_info_ptr = OpInfo::new_as_pointer(ptr::null_mut(), OpType::Pop);
         loop {
             if let Ok(node) = self.try_pop() {
                 if node.is_null() {
@@ -62,10 +67,13 @@ impl<'a, T: Send + Sync + Debug> Stack<T> {
                     }
                 }
             }
+            if let Ok(val) = self.elimination.try_eliminate(op_info_ptr) {
+                return val;
+            }
         }
     }
 
-    fn try_pop(&mut self) -> Result<*mut Node<T>, *mut Node<T>> {
+    fn try_pop(&self) -> Result<*mut Node<T>, *mut Node<T>> {
         let old_head = self.head.load(Ordering::Acquire);
         if old_head.is_null() {
             return Ok(old_head);    
@@ -89,19 +97,23 @@ impl<T: Debug> Node<T> {
 
 #[derive(Debug)]
 struct EliminationLayer<T: Debug> {
-    operations: HashMap<thread::ThreadId, AtomicPtr<OpInfo<T>>>,
+    operations: UnsafeCell<HashMap<thread::ThreadId, AtomicPtr<OpInfo<T>>>>,
         // If we bound the number of threads, and preallocate the HashMap,
         // it should be fine to access concurrently because rehashing will
         // never happen, as guaranteed by the runtime.
     collisions: Vec<AtomicPtr<Option<thread::ThreadId>>>
 }
 
+unsafe impl<T: Debug> Sync for EliminationLayer<T> {}
+
 #[derive(Clone)]
+#[derive(Debug)]
 struct OpInfo<T: Debug> {
     operation: Option<OpType>,
     node: *mut Node<T>
 }
 
+#[derive(Debug)]
 #[derive(Clone)]
 enum OpType {
     Pop,
@@ -115,14 +127,15 @@ impl<T: Debug> EliminationLayer<T> {
             collisions.push(AtomicPtr::new(Box::into_raw(Box::new(None))));
         }
         Self {
-            operations: HashMap::with_capacity(max_threads),
+            operations: UnsafeCell::new(HashMap::with_capacity(max_threads)),
             collisions: collisions
         }
     }
 
-    fn try_eliminate(&mut self, opinfo: OpInfo<T>) -> Result<Option<T>, OpInfo<T>> {
-        let my_info_ptr = Box::into_raw(Box::new(opinfo));  // Need to keep a copy of this pointer
-        self.operations.entry(thread::current().id()).or_insert(AtomicPtr::default()).store(my_info_ptr, Ordering::Acquire);
+    fn try_eliminate(&self, my_info_ptr: *mut OpInfo<T>) -> Result<Option<T>, OpInfo<T>> {
+        unsafe {
+            self.operations.get().as_mut().unwrap().entry(thread::current().id()).or_insert(AtomicPtr::default()).store(my_info_ptr, Ordering::Acquire);
+        }
         let position = Self::choose_position();             
         let mut them = ptr::null_mut();
         
@@ -139,7 +152,7 @@ impl<T: Debug> EliminationLayer<T> {
             if (*them).is_none() {
                 return Err(ptr::read(my_info_ptr));
             }
-            their_info_option = self.operations.get(&ptr::read(them).unwrap());
+            their_info_option = self.operations.get().as_mut().unwrap().get(&ptr::read(them).unwrap());
             if their_info_option.is_none() {
                 return Err(ptr::read(my_info_ptr));
             }
@@ -149,7 +162,7 @@ impl<T: Debug> EliminationLayer<T> {
 
             let my_info = ptr::read(my_info_ptr);
             if my_info.check_complimentary(their_info.operation.as_ref()) {
-                let my_atomic = self.operations.get(&thread::current().id()).unwrap();
+                let my_atomic = self.operations.get().as_mut().unwrap().get(&thread::current().id()).unwrap();
                 if my_atomic.compare_exchange_weak(
                                 my_info_ptr, 
                                 OpInfo::new_none_as_pointer(my_info.node), 
@@ -160,6 +173,7 @@ impl<T: Debug> EliminationLayer<T> {
                                         OpInfo::new_none_as_pointer(their_info.node),
                                         Ordering::AcqRel,
                                         Ordering::Acquire).is_ok() {
+                        println!("Eliminated active!");
                         return Ok(ptr::read(their_info.node).data);
                     } else {
                         // Can't swap, another elimination has happened
@@ -167,19 +181,20 @@ impl<T: Debug> EliminationLayer<T> {
                     }
                 } else {
                     // We've already been eliminated, read the new value
-                    return Ok(self.operations.get(&thread::current().id()).and_then(|atomic| {
+                    return Ok(self.operations.get().as_mut().unwrap().get(&thread::current().id()).and_then(|atomic| {
                         ptr::read(ptr::read(atomic.load(Ordering::Acquire)).node).data
                     }))
                 }
             }
             thread::sleep(Duration::from_millis(500));
-            let my_atomic = self.operations.get(&thread::current().id()).unwrap();
+            let my_atomic = self.operations.get().as_mut().unwrap().get(&thread::current().id()).unwrap();
             if my_atomic.compare_exchange_weak(
                             my_info_ptr,
                             OpInfo::new_none_as_pointer(my_info.node),
                             Ordering::AcqRel,
                             Ordering::Acquire).is_err() {
-                return Ok(self.operations.get(&thread::current().id()).and_then(|atomic| {
+                println!("Eliminated passive!");
+                return Ok(self.operations.get().as_mut().unwrap().get(&thread::current().id()).and_then(|atomic| {
                     ptr::read(ptr::read(atomic.load(Ordering::Acquire)).node).data
                 }))
             } else {
@@ -239,6 +254,8 @@ mod tests {
     use super::Stack;
     use std::sync::atomic::Ordering;
     use std::thread;
+    use std::sync::Arc;
+    use std::cell::RefCell;
 
     #[test]
     fn test_push_single_threaded() {
@@ -286,5 +303,22 @@ mod tests {
                 println!("{:?}", thread::current().id());
             });
         }
+    }
+
+    #[test]
+    fn test_elimination_no_segfault() {
+        let stack: Arc<Stack<u8>> = Arc::new(Stack::new());
+        let stack2 = stack.clone();
+        let stack1 = stack.clone();
+        thread::spawn(move || {
+            for _ in 0..100 {
+                stack2.push(2);
+            }
+        });
+        thread::spawn(move || {
+            for _ in 0..100 {
+                stack1.pop();
+            }
+        });
     }
 }
