@@ -35,6 +35,7 @@ impl<'a, T: Send + Debug> Stack<T> {
                 break;
             }
             if self.elimination.try_eliminate(opinfo_ptr).is_ok() {
+                println!("Eliminated!");
                 break;
             }
         };
@@ -68,6 +69,7 @@ impl<'a, T: Send + Debug> Stack<T> {
                 }
             }
             if let Ok(val) = self.elimination.try_eliminate(op_info_ptr) {
+                println!("Eliminated: {:?}", val);
                 return val;
             }
         }
@@ -133,12 +135,16 @@ impl<T: Debug> EliminationLayer<T> {
     }
 
     fn try_eliminate(&self, my_info_ptr: *mut OpInfo<T>) -> Result<Option<T>, OpInfo<T>> {
+        println!("{:?} Let's eliminate", thread::current().id());
+        
         unsafe {
-            self.operations.get().as_mut().unwrap().entry(thread::current().id()).or_insert(AtomicPtr::default()).store(my_info_ptr, Ordering::Acquire);
+            println!("{:?} Store my info {:?}", thread::current().id(), ptr::read(my_info_ptr));
+            self.operations.get().as_mut().unwrap().entry(thread::current().id()).or_insert(AtomicPtr::default()).store(my_info_ptr, Ordering::Release);
         }
         let position = Self::choose_position();             
         let mut them = ptr::null_mut();
         
+        println!("{:?} Read their info", thread::current().id());
         loop {
             them = self.collisions[position].load(Ordering::Acquire);
             let me = Box::into_raw(Box::new(Some(thread::current().id())));
@@ -146,20 +152,23 @@ impl<T: Debug> EliminationLayer<T> {
                 break;
             }
         }
-
+        println!("{:?} Retrieved info", thread::current().id());
         let mut their_info_option: Option<&AtomicPtr<OpInfo<T>>> = None;
         unsafe {
             if (*them).is_none() {
+                println!("{:?} Failed, they have no info", thread::current().id());
                 return Err(ptr::read(my_info_ptr));
             }
             their_info_option = self.operations.get().as_mut().unwrap().get(&ptr::read(them).unwrap());
             if their_info_option.is_none() {
+                println!("{:?} Failed, they have no info", thread::current().id());
                 return Err(ptr::read(my_info_ptr));
             }
+            println!("{:?} Retrieved their info! {:?}", thread::current().id(), their_info_option);
             let their_atomic = their_info_option.unwrap();
             let their_info_ptr = their_atomic.load(Ordering::Acquire);
             let their_info = ptr::read(their_info_ptr);
-
+            println!("{:?} Retrieved their info from ptr! {:?}", thread::current().id(), their_info);
             let my_info = ptr::read(my_info_ptr);
             if my_info.check_complimentary(their_info.operation.as_ref()) {
                 let my_atomic = self.operations.get().as_mut().unwrap().get(&thread::current().id()).unwrap();
@@ -173,19 +182,22 @@ impl<T: Debug> EliminationLayer<T> {
                                         OpInfo::new_none_as_pointer(their_info.node),
                                         Ordering::AcqRel,
                                         Ordering::Acquire).is_ok() {
-                        println!("Eliminated active!");
+                        println!("{:?} Eliminated active!", thread::current().id());
                         return Ok(ptr::read(their_info.node).data);
                     } else {
                         // Can't swap, another elimination has happened
+                        println!("{:?} Failed.", thread::current().id());
                         return Err(ptr::read(my_info_ptr));
                     }
                 } else {
                     // We've already been eliminated, read the new value
+                    println!("{:?} Eliminated passive", thread::current().id());
                     return Ok(self.operations.get().as_mut().unwrap().get(&thread::current().id()).and_then(|atomic| {
                         ptr::read(ptr::read(atomic.load(Ordering::Acquire)).node).data
                     }))
                 }
             }
+            println!("{:?} Non-complimentary op", thread::current().id());
             thread::sleep(Duration::from_millis(500));
             let my_atomic = self.operations.get().as_mut().unwrap().get(&thread::current().id()).unwrap();
             if my_atomic.compare_exchange_weak(
@@ -193,18 +205,19 @@ impl<T: Debug> EliminationLayer<T> {
                             OpInfo::new_none_as_pointer(my_info.node),
                             Ordering::AcqRel,
                             Ordering::Acquire).is_err() {
-                println!("Eliminated passive!");
+                println!("{:?} Eliminated passive!", thread::current().id());
                 return Ok(self.operations.get().as_mut().unwrap().get(&thread::current().id()).and_then(|atomic| {
                     ptr::read(ptr::read(atomic.load(Ordering::Acquire)).node).data
                 }))
             } else {
+                println!("{:?} Failed", thread::current().id());
                 return Err(ptr::read(my_info_ptr))
             }   
         }
     }
 
     fn choose_position() -> usize {
-        unimplemented!();
+        5
     }
 }
 
@@ -308,17 +321,29 @@ mod tests {
     #[test]
     fn test_elimination_no_segfault() {
         let stack: Arc<Stack<u8>> = Arc::new(Stack::new());
-        let stack2 = stack.clone();
-        let stack1 = stack.clone();
-        thread::spawn(move || {
-            for _ in 0..100 {
-                stack2.push(2);
+        let mut waitvec: Vec<thread::JoinHandle<()>> = Vec::new();
+        for _ in 0..10 {
+            let stack_copy = stack.clone();
+            waitvec.push(thread::spawn(move || {
+                for i in 0..100 {
+                    stack_copy.push(2);
+                }
+            }));
+        }
+        for thread_no in 0..10 {
+            let stack_copy = stack.clone();
+            waitvec.push(thread::spawn(move || {
+                for i in 0..100 {
+                    stack_copy.pop();
+                }
+            }));
+        }
+        for handle in waitvec {
+            match handle.join() {
+                Ok(_) => {},
+                Err(some) => println!("Couldn't join! {:?}", some) 
             }
-        });
-        thread::spawn(move || {
-            for _ in 0..100 {
-                stack1.pop();
-            }
-        });
+        }
+        assert_eq!(None, stack.pop());
     }
 }
