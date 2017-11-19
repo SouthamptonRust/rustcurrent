@@ -199,9 +199,14 @@ impl<T: Debug> EliminationLayer<T> {
                 } else {
                     // We've already been eliminated, read the new value
                     println!("{:?} Eliminated passive", thread::current().id());
-                    return Ok(self.operations.get().as_mut().unwrap().get(&thread::current().id()).and_then(|atomic| {
-                        ptr::read(ptr::read(atomic.load(Ordering::Acquire)).node).data
-                    }))
+                    match my_info.operation {
+                        Some(OpType::Pop) => return Ok(self.operations.get().as_mut().unwrap().get(&thread::current().id())                                   .and_then(|atomic| {
+                                                                ptr::read(ptr::read(atomic.load(Ordering::Acquire)).node).data
+                                                        })),
+                        Some(OpType::Push) => return Ok(None),
+                        _ => { println!("wtf!"); return Ok(None)}
+                    }   
+                    
                 }
             }
             println!("{:?} Non-complimentary op", thread::current().id());
@@ -340,7 +345,7 @@ mod tests {
         for _ in 0..20 {
             let stack_copy = stack.clone();
             waitvec.push(thread::spawn(move || {
-                for i in 0..1000 {
+                for i in 0..10000 {
                     stack_copy.push(2);
                 }
             }));
@@ -348,7 +353,7 @@ mod tests {
         for thread_no in 0..20 {
             let stack_copy = stack.clone();
             waitvec.push(thread::spawn(move || {
-                for i in 0..1000 {
+                for i in 0..10000 {
                     stack_copy.pop();
                 }
             }));
@@ -359,6 +364,7 @@ mod tests {
                 Err(some) => println!("Couldn't join! {:?}", some) 
             }
         }
+        println!("Joined all");
         println!("{:?}", stack.pop());
         println!("{:?}", stack.pop());
         println!("{:?}", stack.pop());
