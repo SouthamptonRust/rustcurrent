@@ -6,6 +6,8 @@ use std::thread;
 use std::time::Duration;
 use std::cell::UnsafeCell;
 
+// TODO memory management
+
 #[derive(Debug)]
 pub struct Stack<T: Send + Debug> {
     head: AtomicPtr<Node<T>>,
@@ -238,6 +240,7 @@ impl<T: Debug> EliminationLayer<T> {
 
     fn choose_position() -> usize {
         5
+        // TODO implement using random
     }
 }
 
