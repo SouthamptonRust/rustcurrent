@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use std::thread;
 use std::time::Duration;
 use std::cell::UnsafeCell;
+use rand::{Rng};
+use rand;
 
 // TODO memory management
 
@@ -24,7 +26,7 @@ impl<'a, T: Send + Debug> Stack<T> {
     pub fn new() -> Stack<T> {
         Stack {
             head: AtomicPtr::default(),
-            elimination: EliminationLayer::new(40, 10)
+            elimination: EliminationLayer::new(40, 5)
         }
     }
 
@@ -107,7 +109,8 @@ struct EliminationLayer<T: Debug> {
         // If we bound the number of threads, and preallocate the HashMap,
         // it should be fine to access concurrently because rehashing will
         // never happen, as guaranteed by the runtime.
-    collisions: Vec<AtomicPtr<Option<thread::ThreadId>>>
+    collisions: Vec<AtomicPtr<Option<thread::ThreadId>>>,
+    collision_size: usize
 }
 
 unsafe impl<T: Debug> Sync for EliminationLayer<T> {}
@@ -134,7 +137,8 @@ impl<T: Debug> EliminationLayer<T> {
         }
         Self {
             operations: UnsafeCell::new(HashMap::with_capacity(max_threads)),
-            collisions: collisions
+            collisions: collisions,
+            collision_size
         }
     }
 
@@ -145,7 +149,8 @@ impl<T: Debug> EliminationLayer<T> {
             println!("{:?} Store my info {:?}", thread::current().id(), ptr::read(my_info_ptr));
             self.operations.get().as_mut().unwrap().entry(thread::current().id()).or_insert(AtomicPtr::default()).store(my_info_ptr, Ordering::Release);
         }
-        let position = Self::choose_position();             
+        let position = self.choose_position();
+        //println!("{:?} Colliding at: {}", thread::current().id(), position);             
         let mut them = ptr::null_mut();
         
         println!("{:?} Read their info", thread::current().id());
@@ -238,9 +243,8 @@ impl<T: Debug> EliminationLayer<T> {
         }
     }
 
-    fn choose_position() -> usize {
-        5
-        // TODO implement using random
+    fn choose_position(&self) -> usize {
+        return rand::thread_rng().gen_range(0, self.collision_size);
     }
 }
 
@@ -357,7 +361,12 @@ mod tests {
             let stack_copy = stack.clone();
             waitvec.push(thread::spawn(move || {
                 for i in 0..10000 {
-                    stack_copy.pop();
+                    loop {
+                        match stack_copy.pop() {
+                            Some(_) => break,
+                            None => ()
+                        }
+                    }
                 }
             }));
         }
@@ -368,8 +377,6 @@ mod tests {
             }
         }
         println!("Joined all");
-        println!("{:?}", stack.pop());
-        println!("{:?}", stack.pop());
-        println!("{:?}", stack.pop());
+        assert_eq!(None, stack.pop());
     }
 }
