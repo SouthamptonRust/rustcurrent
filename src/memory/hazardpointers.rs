@@ -1,6 +1,5 @@
 use memory::recordmanager::RecordManager;
 use std::sync::atomic::{AtomicPtr, Ordering, AtomicBool};
-use std::ptr;
 use std::fmt::Debug;
 use thread_local::CachedThreadLocal;
 
@@ -20,6 +19,22 @@ impl<T: Send + Debug> HPBRManager<T> {
     }
 }
 
+impl<T: Send + Debug> RecordManager for HPBRManager<T> {
+    type Record = T;
+
+    fn allocate(&self, data: Self::Record) -> AtomicPtr<Self::Record> {
+        AtomicPtr::default()
+    }
+
+    fn retire(&self, record: AtomicPtr<Self::Record>) {
+
+    }
+
+    fn protect(&self, record: AtomicPtr<Self::Record>) {
+
+    }
+}
+
 struct HazardPointer<T: Send + Debug> {
     protected: Option<T>,
     next: AtomicPtr<HazardPointer<T>>,
@@ -33,6 +48,14 @@ impl<T: Send + Debug> HazardPointer<T> {
             next: AtomicPtr::default(),
             active: AtomicBool::new(false)
         }
+    }
+
+    fn protect(&mut self, record: T) {
+        self.protected = Some(record);
+    }
+
+    fn activate(&self) -> bool {
+        self.active.compare_and_swap(false, true, Ordering::AcqRel)
     }
 }
 
