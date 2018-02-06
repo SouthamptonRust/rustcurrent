@@ -5,12 +5,49 @@ use std::fmt::Debug;
 use thread_local::CachedThreadLocal;
 
 pub struct HPBRManager<T: Send + Debug> {
-    local_hazards: CachedThreadLocal<Box<Vec<HazardPointer<T>>>>,
-    head: AtomicPtr<HazardPointer<T>>
+    thread_info: CachedThreadLocal<ThreadLocalInfo<T>>,
+    head: AtomicPtr<HazardPointer<T>>,
+    max_retired: usize
+}
+
+impl<T: Send + Debug> HPBRManager<T> {
+    fn new(max_retired: usize) -> Self {
+        HPBRManager {
+            thread_info: CachedThreadLocal::new(),
+            head: AtomicPtr::default(),
+            max_retired
+        }
+    }
 }
 
 struct HazardPointer<T: Send + Debug> {
-    protected: T,
+    protected: Option<T>,
     next: AtomicPtr<HazardPointer<T>>,
-    active: AtomicBool,
+    active: AtomicBool
+}
+
+impl<T: Send + Debug> HazardPointer<T> {
+    fn new() -> Self {
+        HazardPointer {
+            protected: None,
+            next: AtomicPtr::default(),
+            active: AtomicBool::new(false)
+        }
+    }
+}
+
+struct ThreadLocalInfo<T: Send + Debug> {
+    local_hazards: Box<Vec<HazardPointer<T>>>,
+    retired_list: Box<Vec<AtomicPtr<T>>>,
+    retired_number: usize
+}
+
+impl<T: Send + Debug> ThreadLocalInfo<T> {
+    fn new() -> Self {
+        ThreadLocalInfo {
+            local_hazards: Box::new(Vec::new()),
+            retired_list: Box::new(Vec::new()),
+            retired_number: 0
+        }
+    }
 }
