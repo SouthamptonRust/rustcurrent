@@ -82,7 +82,7 @@ impl<'a, T: Send + Debug> Stack<T> {
     }
 
     fn try_pop(&self) -> Result<*mut Node<T>, *mut Node<T>> {
-        let old_head = self.head.load(Ordering::Acquire);
+        let old_head = self.head.load(Ordering::Acquire); // This is the pointer that needs protecting -- if it is freed, then the read of new_head will FAIL and segfault like a binch
         if old_head.is_null() {
             return Ok(old_head);    
                 // If null, return early to avoid accessing
