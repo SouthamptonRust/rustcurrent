@@ -7,15 +7,17 @@ use std::collections::VecDeque;
 pub struct HPBRManager<'a, T: Send + Debug + 'a> {
     thread_info: CachedThreadLocal<ThreadLocalInfo<'a, T>>,
     head: AtomicPtr<HazardPointer<T>>,
-    max_retired: usize
+    max_retired: usize,
+    num_hp_per_thread: usize
 }
 
 impl<'a, T: Send + Debug> HPBRManager<'a, T> {
-    fn new(max_retired: usize) -> Self {
+    fn new(max_retired: usize, num_hp_per_thread: usize) -> Self {
         HPBRManager {
             thread_info: CachedThreadLocal::new(),
             head: AtomicPtr::default(),
-            max_retired
+            max_retired,
+            num_hp_per_thread
         }
     }
 
@@ -23,12 +25,35 @@ impl<'a, T: Send + Debug> HPBRManager<'a, T> {
         AtomicPtr::new(Box::into_raw(Box::new(data)))
     }
 
+    fn allocate_hp(&self) -> *mut HazardPointer<T> {
+        let mut new_hp = HazardPointer::new();
+        let new_hp_ptr =  Box::into_raw(Box::new(new_hp));
+        let old_head = self.head.load(Ordering::AcqRel);
+
+        loop {
+            if self.head.compare_and_swap(old_head, new_hp_ptr, Ordering::AcqRel) == old_head {
+                break;
+            }
+        }
+
+        new_hp_ptr
+    }
+
     fn retire(&self, record: *mut T) {
 
     }
 
     fn protect(&self, record: *mut T, hazard_num: usize) {
-        let thread_info = self.thread_info.get_or(|| Box::new(ThreadLocalInfo::new()));
+        let thread_info = self.thread_info.get_or(|| {
+            let mut starting_hp: Vec<&'a mut HazardPointer<T>> = Vec::new();
+            for _ in 0..self.num_hp_per_thread {
+                let hp = self.allocate_hp();
+                unsafe {
+                    starting_hp.push(&mut (*hp))
+                }
+            }
+            Box::new(ThreadLocalInfo::new(self.num_hp_per_thread))
+        });
 
     }
 }
@@ -66,11 +91,15 @@ struct ThreadLocalInfo<'a, T: Send + Debug + 'a> {
 }
 
 impl<'a, T: Send + Debug> ThreadLocalInfo<'a, T> {
-    fn new() -> Self {
-        ThreadLocalInfo {
+    fn new(num_hp: usize) -> Self {
+        let info = ThreadLocalInfo {
             local_hazards: Box::new(Vec::new()),
             retired_list: Box::new(VecDeque::new()),
             retired_number: 0
+        };
+        for i in 0..num_hp {
         }
+
+        info
     }
 }
