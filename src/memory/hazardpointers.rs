@@ -61,7 +61,7 @@ unsafe impl<'a, T: Debug + Send + 'a> Send for ThreadLocalInfo<'a, T> {}
 
 struct ThreadLocalInfo<'a, T: Send + Debug + 'a> {
     local_hazards: Box<Vec<&'a mut HazardPointer<T>>>,
-    retired_list: Box<VecDeque<AtomicPtr<T>>>,
+    retired_list: Box<VecDeque<*mut T>>,
     retired_number: usize
 }
 
