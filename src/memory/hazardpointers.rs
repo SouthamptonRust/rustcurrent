@@ -117,6 +117,7 @@ impl<'a, T: Send + Debug> HPBRManager<T> {
                     Self::free(ptr);
                 }
             }
+            println!("DELETED: {}", thread_info.retired_number - new_retired_list.len());
             thread_info.retired_number = new_retired_list.len();
             thread_info.retired_list = Box::new(new_retired_list);
         }
