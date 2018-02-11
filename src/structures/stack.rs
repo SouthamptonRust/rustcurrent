@@ -7,13 +7,15 @@ use std::time::Duration;
 use std::cell::UnsafeCell;
 use rand::{Rng};
 use rand;
+use memory::HPBRManager;
 
 // TODO memory management
 
 #[derive(Debug)]
 pub struct Stack<T: Send + Debug> {
     head: AtomicPtr<Node<T>>,
-    elimination: EliminationLayer<T>
+    elimination: EliminationLayer<T>,
+    manager: HPBRManager<T>
 }
 
 #[derive(Debug)]
@@ -22,7 +24,7 @@ pub struct Node<T: Debug> {
     next: AtomicPtr<Node<T>>
 }
 
-impl<'a, T: Send + Debug> Stack<T> {
+impl<T: Send + Debug> Stack<T> {
     pub fn new() -> Stack<T> {
         Stack {
             head: AtomicPtr::default(),

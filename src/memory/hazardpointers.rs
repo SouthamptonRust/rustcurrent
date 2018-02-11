@@ -72,6 +72,10 @@ impl<'a, T: Send + Debug> HPBRManager<'a, T> {
             thread_info_mut.local_hazards[hazard_num].unprotect();
             thread_info_mut.retired_list.push_back(record);
             thread_info_mut.retired_number += 1;
+
+            if thread_info_mut.retired_number > self.max_retired {
+                self.scan();
+            }
         }
     }
 
@@ -82,6 +86,8 @@ impl<'a, T: Send + Debug> HPBRManager<'a, T> {
         }
     }
 
+    /// Where the main deletion aspect of the HBPRManager takes place
+    /// Deletes any retired nodes of this thread which are not protected by hazard pointers
     fn scan(&self) {
         let mut hazard_set: HashSet<*mut T> = HashSet::new();
         let mut current = self.head.load(Ordering::Relaxed);
@@ -108,13 +114,14 @@ impl<'a, T: Send + Debug> HPBRManager<'a, T> {
                     Self::free(ptr);
                 }
             }
+            thread_info.retired_number = new_retired_list.len();
             thread_info.retired_list = Box::new(new_retired_list);
         }
     }
 
     fn free(garbage: *mut T) {
         // Letting this box go out of scope should call Drop on the garbage
-        // TODO: test this actually works
+        // Seems to work after very basic
         unsafe {
             let boxed_garbage = Box::from_raw(garbage);
         }
@@ -207,11 +214,22 @@ impl<'a, T: Send + Debug> ThreadLocalInfo<'a, T> {
 mod tests {
     use super::HPBRManager;
 
+    #[derive(Debug)]
+    struct Foo {
+        data: u8
+    }
+    
+    impl Drop for Foo {
+        fn drop(&mut self) {
+            println!("Dropping: {:?}", self.data);
+        }
+    }
+
     #[test]
     fn test_add_hp() {
-        let mut manager : HPBRManager<u8> = HPBRManager::new(100, 2);
-        let test_pointer_one = Box::into_raw(Box::new(32));
-        let test_pointer_two = Box::into_raw(Box::new(24));
+        let mut manager : HPBRManager<Foo> = HPBRManager::new(100, 2);
+        let test_pointer_one = Box::into_raw(Box::new(Foo {data: 32}));
+        let test_pointer_two = Box::into_raw(Box::new(Foo {data: 24}));
         manager.protect(test_pointer_one, 0);
         manager.protect(test_pointer_two, 1);
         println!("{:?}", manager);
