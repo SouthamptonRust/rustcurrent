@@ -27,7 +27,7 @@ impl<'a, T: Send + Debug + 'a> Debug for HPBRManager<'a, T> {
             }
         };
 
-        write!(f, "{:?}", &thread_info_string[..])
+        write!(f, "HPBRManager(\n\tthread_info: {:?}, \n\thead: {:?}, \n\tmax_retired: {:?}", &thread_info_string, self.head, self.max_retired)
     }
 }
 
@@ -65,12 +65,29 @@ impl<'a, T: Send + Debug> HPBRManager<'a, T> {
         new_hp_ptr
     }
 
-    fn retire(&self, record: *mut T) {
-
+    fn retire(&self, record: *mut T, hazard_num: usize) {
+        unsafe {
+            let thread_info_mut = self.get_mut_thread_info();
+            thread_info_mut.local_hazards[hazard_num].unprotect();
+            thread_info_mut.retired_list.push_back(record);
+            thread_info_mut.retired_number += 1;
+        }
     }
 
-    fn protect(&mut self, record: *mut T, hazard_num: usize) {
-        let mut thread_info_ptr = self.thread_info.get_or(|| {
+    fn protect(&self, record: *mut T, hazard_num: usize) {
+        unsafe {
+            let thread_info_mut = self.get_mut_thread_info();
+            thread_info_mut.local_hazards[hazard_num].protect(record);
+        }
+    }
+
+    /// Get the thread local info described in the paper as a mutable reference.
+    /// On first access, will create hazard pointers for the thread and add them
+    /// to the central list.
+    unsafe fn get_mut_thread_info(&self) -> &mut ThreadLocalInfo<'a, T> {
+        // If this is the first time the threadlocal data is being access, create
+        // it and allocate new hps
+        let thread_info_ptr = self.thread_info.get_or(|| {
             let mut starting_hp: Vec<&'a mut HazardPointer<T>> = Vec::new();
             for _ in 0..self.num_hp_per_thread {
                 let hp = self.allocate_hp();
@@ -81,14 +98,10 @@ impl<'a, T: Send + Debug> HPBRManager<'a, T> {
             Box::new(UnsafeCell::new(ThreadLocalInfo::new(starting_hp)))
         }).get();
 
-        unsafe {
-            let thread_info_mut = &mut *thread_info_ptr;
-            thread_info_mut.local_hazards[hazard_num].protect(record);
-        }
+        &mut *thread_info_ptr
     }
 }
 
-#[derive(Debug)]
 struct HazardPointer<T: Send + Debug> {
     protected: Option<*mut T>,
     next: AtomicPtr<HazardPointer<T>>,
@@ -108,8 +121,28 @@ impl<T: Send + Debug> HazardPointer<T> {
         self.protected = Some(record);
     }
 
+    fn unprotect(&mut self) {
+        self.protected = None;
+    }
+
     fn activate(&self) -> bool {
         self.active.compare_and_swap(false, true, Ordering::AcqRel)
+    }
+}
+
+impl<T: Debug + Send> Debug for HazardPointer<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let val_string = match self.protected {
+            None => format!("protected: None"),
+            Some(ptr) => {
+                unsafe {
+                    let val = &*ptr;
+                    format!("protected: {{ Pointer: {:?}, Value: {:?} }}", ptr, val)
+                }
+            }
+        };
+
+        write!(f, "HazardPointer: {{ {}, next: {:?}, active: {:?} }}", &val_string, self.next, self.active)
     }
 }
 
@@ -138,9 +171,14 @@ mod tests {
     #[test]
     fn test_add_hp() {
         let mut manager : HPBRManager<u8> = HPBRManager::new(100, 2);
-        manager.protect(Box::into_raw(Box::new(32)), 1);
+        let test_pointer_one = Box::into_raw(Box::new(32));
+        let test_pointer_two = Box::into_raw(Box::new(24));
+        manager.protect(test_pointer_one, 0);
+        manager.protect(test_pointer_two, 1);
+
+        manager.retire(test_pointer_one, 0);
         println!("{:?}", manager);
 
-        
+                
     }
 }
