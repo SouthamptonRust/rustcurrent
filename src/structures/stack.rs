@@ -298,6 +298,7 @@ mod tests {
     use std::cell::RefCell;
 
     #[test]
+    #[ignore]
     fn test_push_single_threaded() {
         let mut stack : Stack<u8> = Stack::new();
 
@@ -316,6 +317,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_pop_single_threaded() {
         let mut stack : Stack<u8> = Stack::new();
 
@@ -337,6 +339,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_thread_id() {
         for i in 0..10 {
             thread::spawn(|| {
@@ -346,6 +349,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_elimination_no_segfault() {
         let stack: Arc<Stack<u8>> = Arc::new(Stack::new());
         let mut waitvec: Vec<thread::JoinHandle<()>> = Vec::new();
