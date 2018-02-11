@@ -15,7 +15,7 @@ use memory::HPBRManager;
 pub struct Stack<T: Send + Debug> {
     head: AtomicPtr<Node<T>>,
     elimination: EliminationLayer<T>,
-    manager: HPBRManager<T>
+    manager: HPBRManager<Node<T>>
 }
 
 #[derive(Debug)]
@@ -28,7 +28,8 @@ impl<T: Send + Debug> Stack<T> {
     pub fn new() -> Stack<T> {
         Stack {
             head: AtomicPtr::default(),
-            elimination: EliminationLayer::new(40, 5)
+            elimination: EliminationLayer::new(40, 5),
+            manager: HPBRManager::new(100, 1)
         }
     }
 
@@ -67,11 +68,11 @@ impl<T: Send + Debug> Stack<T> {
                     return None;
                 } else {
                     unsafe {
-                        return ptr::replace(node, Node {
-                            data: None,
-                            next: AtomicPtr::default()
-                        }).data;
-                            // Memory leak here, Node is never removed
+                        let node_val = ptr::replace(node, Node {data: None, next: AtomicPtr::default()});
+                        let data = node_val.data;
+                        // Retire the node
+                        self.manager.retire(node, 0);
+                        return data;
                     }
                 }
             }
@@ -90,6 +91,10 @@ impl<T: Send + Debug> Stack<T> {
                 // If null, return early to avoid accessing
         }
         unsafe {
+            self.manager.protect(old_head, 0);
+            if !ptr::eq(old_head, self.head.load(Ordering::Acquire)) {
+                return Err(old_head);
+            }
             let new_head = (*old_head).next.load(Ordering::Acquire);
             self.head.compare_exchange_weak(old_head, new_head, Ordering::AcqRel, Ordering::Acquire)
         }
@@ -299,6 +304,18 @@ mod tests {
     use std::sync::Arc;
     use std::cell::RefCell;
 
+    #[derive(Debug)]
+    #[derive(PartialEq)]
+    struct Foo {
+        data: u8
+    }
+    
+    impl Drop for Foo {
+        fn drop(&mut self) {
+            println!("Dropping: {:?}", self.data);
+        }
+    }
+
     #[test]
     #[ignore]
     fn test_push_single_threaded() {
@@ -319,25 +336,22 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_pop_single_threaded() {
-        let mut stack : Stack<u8> = Stack::new();
+        let mut stack : Stack<Foo> = Stack::new();
 
-        stack.push(1);
-        println!("{:?}", stack);
-        stack.push(2);
-        println!("{:?}", stack);
-        stack.push(3);
-        println!("{:?}", stack);
+        stack.push(Foo {data: 1});
+        stack.push(Foo {data: 2});
+        stack.push(Foo {data: 4});
 
-        assert_eq!(stack.pop(), Some(3));
-        println!("{:?}", stack);
-        assert_eq!(stack.pop(), Some(2));
-        println!("{:?}", stack);
-        assert_eq!(stack.pop(), Some(1));
-        println!("{:?}", stack);
+        println!("{:?}", stack.manager);
+
+        assert_eq!(stack.pop(), Some(Foo {data: 4}));
+        assert_eq!(stack.pop(), Some(Foo {data: 2}));
+        assert_eq!(stack.pop(), Some(Foo {data: 1}));
         assert_eq!(stack.pop(), None);
         assert_eq!(stack.pop(), None);
+
+        println!("{:?}", stack.manager);
     }
 
     #[test]
@@ -351,7 +365,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_elimination_no_segfault() {
         let stack: Arc<Stack<u8>> = Arc::new(Stack::new());
         let mut waitvec: Vec<thread::JoinHandle<()>> = Vec::new();

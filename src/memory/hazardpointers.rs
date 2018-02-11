@@ -7,14 +7,14 @@ use std::cell::UnsafeCell;
 use std::fmt;
 use std::ptr;
 
-pub struct HPBRManager<'a, T: Send + Debug + 'a> {
-    thread_info: CachedThreadLocal<UnsafeCell<ThreadLocalInfo<'a, T>>>,
+pub struct HPBRManager<T: Send + Debug> {
+    thread_info: CachedThreadLocal<UnsafeCell<ThreadLocalInfo<T>>>,
     head: AtomicPtr<HazardPointer<T>>,
     max_retired: usize,
     num_hp_per_thread: usize
 }
 
-impl<'a, T: Send + Debug + 'a> Debug for HPBRManager<'a, T> {
+impl<'a, T: Send + Debug + 'a> Debug for HPBRManager<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut thread_info_string = match self.thread_info.get() {
             None => "".to_owned(),
@@ -32,8 +32,8 @@ impl<'a, T: Send + Debug + 'a> Debug for HPBRManager<'a, T> {
     }
 }
 
-impl<'a, T: Send + Debug> HPBRManager<'a, T> {
-    fn new(max_retired: usize, num_hp_per_thread: usize) -> Self {
+impl<'a, T: Send + Debug> HPBRManager<T> {
+    pub fn new(max_retired: usize, num_hp_per_thread: usize) -> Self {
         HPBRManager {
             thread_info: CachedThreadLocal::new(),
             head: AtomicPtr::default(),
@@ -66,10 +66,10 @@ impl<'a, T: Send + Debug> HPBRManager<'a, T> {
         new_hp_ptr
     }
 
-    fn retire(&self, record: *mut T, hazard_num: usize) {
+    pub fn retire(&self, record: *mut T, hazard_num: usize) {
         unsafe {
             let thread_info_mut = self.get_mut_thread_info();
-            thread_info_mut.local_hazards[hazard_num].unprotect();
+            thread_info_mut.get_mut_hazard_pointer(hazard_num).unprotect();
             thread_info_mut.retired_list.push_back(record);
             thread_info_mut.retired_number += 1;
 
@@ -79,16 +79,19 @@ impl<'a, T: Send + Debug> HPBRManager<'a, T> {
         }
     }
 
-    fn protect(&self, record: *mut T, hazard_num: usize) {
+    pub fn protect(&self, record: *mut T, hazard_num: usize) {
         unsafe {
             let thread_info_mut = self.get_mut_thread_info();
-            thread_info_mut.local_hazards[hazard_num].protect(record);
+            thread_info_mut.get_mut_hazard_pointer(hazard_num).protect(record);
         }
     }
 
     /// Where the main deletion aspect of the HBPRManager takes place
     /// Deletes any retired nodes of this thread which are not protected by hazard pointers
     fn scan(&self) {
+        println!("-------------------------------");
+        println!("           SCANNING            ");
+        println!("-------------------------------");
         let mut hazard_set: HashSet<*mut T> = HashSet::new();
         let mut current = self.head.load(Ordering::Relaxed);
 
@@ -117,6 +120,7 @@ impl<'a, T: Send + Debug> HPBRManager<'a, T> {
             thread_info.retired_number = new_retired_list.len();
             thread_info.retired_list = Box::new(new_retired_list);
         }
+        println!("FINISHED SCANNING");
     }
 
     fn free(garbage: *mut T) {
@@ -124,22 +128,21 @@ impl<'a, T: Send + Debug> HPBRManager<'a, T> {
         // Seems to work after very basic
         unsafe {
             let boxed_garbage = Box::from_raw(garbage);
+            //println!("Attempting to drop: {:?}", &boxed_garbage);
         }
     }
 
     /// Get the thread local info described in the paper as a mutable reference.
     /// On first access, will create hazard pointers for the thread and add them
     /// to the central list.
-    unsafe fn get_mut_thread_info(&self) -> &mut ThreadLocalInfo<'a, T> {
+    unsafe fn get_mut_thread_info(&self) -> &mut ThreadLocalInfo<T> {
         // If this is the first time the threadlocal data is being access, create
         // it and allocate new hps
         let thread_info_ptr = self.thread_info.get_or(|| {
-            let mut starting_hp: Vec<&'a mut HazardPointer<T>> = Vec::new();
+            let mut starting_hp: Vec<*mut HazardPointer<T>> = Vec::new();
             for _ in 0..self.num_hp_per_thread {
                 let hp = self.allocate_hp();
-                unsafe {
-                    starting_hp.push(&mut (*hp));
-                }
+                starting_hp.push(hp);
             }
             Box::new(UnsafeCell::new(ThreadLocalInfo::new(starting_hp)))
         }).get();
@@ -192,22 +195,26 @@ impl<T: Debug + Send> Debug for HazardPointer<T> {
     }
 }
 
-unsafe impl<'a, T: Debug + Send + 'a> Send for ThreadLocalInfo<'a, T> {}
+unsafe impl<T: Debug + Send> Send for ThreadLocalInfo<T> {}
 
 #[derive(Debug)]
-struct ThreadLocalInfo<'a, T: Send + Debug + 'a> {
-    local_hazards: Vec<&'a mut HazardPointer<T>>,
+struct ThreadLocalInfo<T: Send + Debug> {
+    local_hazards: Vec<*mut HazardPointer<T>>,
     retired_list: Box<VecDeque<*mut T>>,
     retired_number: usize
 }
 
-impl<'a, T: Send + Debug> ThreadLocalInfo<'a, T> {
-    fn new(starting_hazards: Vec<&'a mut HazardPointer<T>>) -> Self {
+impl<'a, T: Send + Debug> ThreadLocalInfo<T> {
+    fn new(starting_hazards: Vec<*mut HazardPointer<T>>) -> Self {
         ThreadLocalInfo {
             local_hazards: starting_hazards,
             retired_list: Box::new(VecDeque::new()),
             retired_number: 0
         }
+    }
+
+    unsafe fn get_mut_hazard_pointer(&mut self, hazard_index: usize) -> &mut HazardPointer<T> {
+        &mut *self.local_hazards[hazard_index]
     }
 }
 
