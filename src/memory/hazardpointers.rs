@@ -2,9 +2,10 @@ use memory::recordmanager::RecordManager;
 use std::sync::atomic::{AtomicPtr, Ordering, AtomicBool};
 use std::fmt::Debug;
 use thread_local::CachedThreadLocal;
-use std::collections::VecDeque;
+use std::collections::{VecDeque, HashSet};
 use std::cell::UnsafeCell;
 use std::fmt;
+use std::ptr;
 
 pub struct HPBRManager<'a, T: Send + Debug + 'a> {
     thread_info: CachedThreadLocal<UnsafeCell<ThreadLocalInfo<'a, T>>>,
@@ -78,6 +79,44 @@ impl<'a, T: Send + Debug> HPBRManager<'a, T> {
         unsafe {
             let thread_info_mut = self.get_mut_thread_info();
             thread_info_mut.local_hazards[hazard_num].protect(record);
+        }
+    }
+
+    fn scan(&self) {
+        let mut hazard_set: HashSet<*mut T> = HashSet::new();
+        let mut current = self.head.load(Ordering::Relaxed);
+
+        // Loop through the hazard list and add all non-nulls to the hazard list
+        while !ptr::eq(current, ptr::null()) {
+            unsafe {
+                let hazard_pointer = &*current;
+                if let Some(ptr) = hazard_pointer.protected {
+                    hazard_set.insert(ptr);
+                }
+                current = hazard_pointer.next.load(Ordering::Relaxed);
+            }
+        }
+
+        // This will store the nodes that cannot yet be deleted
+        let mut new_retired_list: VecDeque<*mut T> = VecDeque::new();
+        unsafe {
+            let thread_info = self.get_mut_thread_info();
+            for ptr in thread_info.retired_list.drain(..) {
+                if hazard_set.contains(&ptr) {
+                    new_retired_list.push_back(ptr);
+                } else {
+                    Self::free(ptr);
+                }
+            }
+            thread_info.retired_list = Box::new(new_retired_list);
+        }
+    }
+
+    fn free(garbage: *mut T) {
+        // Letting this box go out of scope should call Drop on the garbage
+        // TODO: test this actually works
+        unsafe {
+            let boxed_garbage = Box::from_raw(garbage);
         }
     }
 
@@ -175,10 +214,12 @@ mod tests {
         let test_pointer_two = Box::into_raw(Box::new(24));
         manager.protect(test_pointer_one, 0);
         manager.protect(test_pointer_two, 1);
-
+        println!("{:?}", manager);
         manager.retire(test_pointer_one, 0);
         println!("{:?}", manager);
+        manager.scan();
 
+        println!("{:?}", manager);
                 
     }
 }
