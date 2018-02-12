@@ -34,29 +34,27 @@ impl<T: Send + Debug> Stack<T> {
     }
 
     pub fn push(&self, val: T) {
-        // Create a new node on the heap, with a pointer to it
-        let node = Node::new_as_pointer(val);
-        let opinfo_ptr = OpInfo::new_as_pointer(node, OpType::Push);
+        let mut node = Box::new(Node::new(val));
         loop {
-            if self.try_push(node) {
-                break;
+            node = match self.try_push(node) {
+                Ok(_) => { return; }
+                Err(old_node) => old_node
             }
-            if self.elimination.try_eliminate(opinfo_ptr).is_ok() {
-                println!("{:?} Eliminated!", thread::current().id());
-                break;
-            }
-            println!("{:?} Failed", thread::current().id());
-        };
+        }
     }
 
-    fn try_push(&self, node: *mut Node<T>) -> bool {
+    fn try_push(&self, mut node: Box<Node<T>>) -> Result<(), Box<Node<T>>> {
         let old_head = self.head.load(Ordering::Acquire);
-        unsafe {
-            (*node).next = AtomicPtr::new(old_head);
-        }
-        match self.head.compare_exchange_weak(old_head, node, Ordering::AcqRel, Ordering::Acquire) {
-            Ok(_) => true,
-            Err(_) => false
+        node.next = AtomicPtr::new(old_head);
+
+        let node_ptr = Box::into_raw(node);
+        match self.head.compare_exchange_weak(old_head, node_ptr, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => Ok(()),
+            Err(_) => {
+                unsafe {
+                    Err(Box::from_raw(node_ptr))
+                }
+            }
         }
     }
 
@@ -108,7 +106,23 @@ impl<T: Debug> Node<T> {
             next: AtomicPtr::default()
         }))
     }
+
+    fn new(val: T) -> Self {
+        Node {
+            data: Some(val),
+            next: AtomicPtr::default()
+        }
+    }
 }
+
+impl<T: Debug> Default for Node<T> {
+    fn default() -> Self {
+        Node {
+            data: None,
+            next: AtomicPtr::default()
+        }
+    }
+} 
 
 #[derive(Debug)]
 struct EliminationLayer<T: Debug> {
@@ -317,7 +331,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_push_single_threaded() {
         let mut stack : Stack<u8> = Stack::new();
 
@@ -336,6 +349,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_pop_single_threaded() {
         let mut stack : Stack<Foo> = Stack::new();
 
@@ -365,6 +379,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_elimination_no_segfault() {
         let stack: Arc<Stack<u8>> = Arc::new(Stack::new());
         let mut waitvec: Vec<thread::JoinHandle<()>> = Vec::new();
