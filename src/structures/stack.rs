@@ -59,42 +59,33 @@ impl<T: Send + Debug> Stack<T> {
     }
 
     pub fn pop(&self) -> Option<T> {
-        let op_info_ptr = OpInfo::new_as_pointer(ptr::null_mut(), OpType::Pop);
         loop {
-            if let Ok(node) = self.try_pop() {
-                if node.is_null() {
-                    return None;
-                } else {
-                    unsafe {
-                        let node_val = ptr::replace(node, Node {data: None, next: AtomicPtr::default()});
-                        let data = node_val.data;
-                        // Retire the node
-                        self.manager.retire(node, 0);
-                        return data;
-                    }
-                }
+            if let Ok(val) = self.try_pop() {
+                return val
             }
-            if let Ok(val) = self.elimination.try_eliminate(op_info_ptr) {
-                println!("{:?} Eliminated: {:?}", thread::current().id(), val);
-                return val;
-            }
-            println!("{:?} Failed", thread::current().id());
         }
     }
 
-    fn try_pop(&self) -> Result<*mut Node<T>, *mut Node<T>> {
-        let old_head = self.head.load(Ordering::Acquire); // This is the pointer that needs protecting -- if it is freed, then the read of new_head will FAIL and segfault like a binch
+    pub fn try_pop(&self) -> Result<Option<T>, ()> {
+        let old_head = self.head.load(Ordering::Acquire);
         if old_head.is_null() {
-            return Ok(old_head);    
-                // If null, return early to avoid accessing
+            return Ok(None)
         }
         unsafe {
             self.manager.protect(old_head, 0);
             if !ptr::eq(old_head, self.head.load(Ordering::Acquire)) {
-                return Err(old_head);
+                return Err(())
             }
             let new_head = (*old_head).next.load(Ordering::Acquire);
-            self.head.compare_exchange_weak(old_head, new_head, Ordering::AcqRel, Ordering::Acquire)
+            match self.head.compare_exchange_weak(old_head, new_head, Ordering::AcqRel, Ordering::Acquire) {
+                Err(_) => Err(()),
+                Ok(old_head) => {
+                    let old_head_val = ptr::replace(old_head, Node::default());
+                    let data = old_head_val.data;
+                    self.manager.retire(old_head, 0);
+                    Ok(data)
+                }
+            }
         }
     }
 }
@@ -349,7 +340,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_pop_single_threaded() {
         let mut stack : Stack<Foo> = Stack::new();
 
@@ -379,7 +369,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_elimination_no_segfault() {
         let stack: Arc<Stack<u8>> = Arc::new(Stack::new());
         let mut waitvec: Vec<thread::JoinHandle<()>> = Vec::new();
@@ -397,7 +386,7 @@ mod tests {
                 for i in 0..10000 {
                     loop {
                         match stack_copy.pop() {
-                            Some(n) => { break},
+                            Some(n) => { break },
                             None => ()
                         }
                     }
