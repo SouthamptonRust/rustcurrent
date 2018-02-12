@@ -14,7 +14,7 @@ use memory::HPBRManager;
 #[derive(Debug)]
 pub struct Stack<T: Send + Debug> {
     head: AtomicPtr<Node<T>>,
-    elimination: EliminationLayer<T>,
+    elimination: EliminationLayerOld<T>,
     manager: HPBRManager<Node<T>>
 }
 
@@ -28,7 +28,7 @@ impl<T: Send + Debug> Stack<T> {
     pub fn new() -> Stack<T> {
         Stack {
             head: AtomicPtr::default(),
-            elimination: EliminationLayer::new(40, 5),
+            elimination: EliminationLayerOld::new(40, 5),
             manager: HPBRManager::new(3000, 1)
         }
     }
@@ -116,8 +116,8 @@ impl<T: Debug> Default for Node<T> {
 } 
 
 #[derive(Debug)]
-struct EliminationLayer<T: Debug> {
-    operations: UnsafeCell<HashMap<thread::ThreadId, AtomicPtr<OpInfo<T>>>>,
+struct EliminationLayerOld<T: Debug> {
+    operations: UnsafeCell<HashMap<thread::ThreadId, AtomicPtr<OpInfoOld<T>>>>,
         // If we bound the number of threads, and preallocate the HashMap,
         // it should be fine to access concurrently because rehashing will
         // never happen, as guaranteed by the runtime.
@@ -125,11 +125,113 @@ struct EliminationLayer<T: Debug> {
     collision_size: usize
 }
 
-unsafe impl<T: Debug> Sync for EliminationLayer<T> {}
+struct EliminationLayer<T: Debug> {
+    operations: UnsafeCell<HashMap<thread::ThreadId, AtomicPtr<OpInfo<T>>>>,
+    collisions: Vec<AtomicPtr<Option<thread::ThreadId>>>,
+    collision_size: usize
+}
+
+impl<T: Debug> EliminationLayer<T> {
+    fn new(max_threads: usize, collision_size: usize) -> Self {
+        let mut collisions: Vec<AtomicPtr<Option<thread::ThreadId>>> = Vec::new();
+        for _ in 0..collision_size {
+            collisions.push(AtomicPtr::new(Box::into_raw(Box::default())))
+        }
+        EliminationLayer {
+            operations: UnsafeCell::new(HashMap::with_capacity(max_threads)),
+            collisions,
+            collision_size
+        }
+    }
+
+    // TODO finish writing this 
+    fn try_eliminate(&self, op: OpType, node: Box<Node<T>>) -> Result<Option<T>, Box<Node<T>>> {
+        let op_info_ptr = OpInfo::new_as_ptr(op, node);
+        let thread_id = thread::current().id();
+
+        unsafe {
+            let mut_operations = self.get_mut_operations();
+            mut_operations.entry(thread_id)
+                          .or_insert(AtomicPtr::default())
+                          .store(op_info_ptr, Ordering::Release);
+        }
+
+        let them = match self.get_eliminate_partner(thread_id) {
+            Ok(their_id) => their_id,
+            Err(_) => { return Err(OpInfo::get_boxed_node(op_info_ptr))}
+        };
+
+        Ok(None)
+    }
+
+    fn get_eliminate_partner(&self, me: thread::ThreadId) -> Result<thread::ThreadId, ()> {
+        let position = self.choose_position();
+        let me_ptr = Box::into_raw(Box::new(Some(me)));
+        unsafe {
+            loop {
+                let them_ptr = self.collisions[position].load(Ordering::Acquire);
+                if let Ok(them_ptr) = self.collisions[position].compare_exchange_weak(them_ptr, me_ptr, Ordering::AcqRel, Ordering::Release) {
+                    return match *them_ptr {
+                        Some(id) => Ok(id),
+                        None => Err(())
+                    }
+                }
+            }
+        }
+    }
+
+    fn choose_position(&self) -> usize {
+        return rand::thread_rng().gen_range(0, self.collision_size);
+    }
+
+    unsafe fn get_mut_operations(&self) -> &mut HashMap<thread::ThreadId, AtomicPtr<OpInfo<T>>> {
+        &mut *self.operations.get()
+    }
+}
+
+//unsafe impl<T: Debug> Sync for EliminationLayerOld<T> {}
+
+struct OpInfo<T: Debug> {
+    operation: OpType,
+    node: Box<Node<T>>
+}
+
+impl<T: Debug> OpInfo<T> {
+    fn new(operation: OpType, node: Box<Node<T>>) -> Self {
+        OpInfo {
+            operation,
+            node
+        }
+    }
+
+    fn new_as_ptr(operation: OpType, node: Box<Node<T>>) -> *mut Self {
+        Box::into_raw(Box::new(OpInfo {
+            operation,
+            node
+        }))
+    }
+
+    // Should probably free the opinfo pointer
+    fn get_boxed_node(opinfo_ptr: *mut Self) -> Box<Node<T>> {
+        unsafe {
+            let opinfo = ptr::replace(opinfo_ptr, OpInfo::default());
+            opinfo.node
+        }
+    }
+}
+
+impl<T: Debug> Default for OpInfo<T> {
+    fn default() -> Self {
+        OpInfo {
+            operation: OpType::Done,
+            node: Box::default()
+        }
+    }
+}
 
 #[derive(Clone)]
 #[derive(Debug)]
-struct OpInfo<T: Debug> {
+struct OpInfoOld<T: Debug> {
     operation: Option<OpType>,
     node: *mut Node<T>
 }
@@ -138,10 +240,13 @@ struct OpInfo<T: Debug> {
 #[derive(Clone)]
 enum OpType {
     Pop,
-    Push
+    Push,
+    Done
 }
 
-impl<T: Debug> EliminationLayer<T> {
+
+
+impl<T: Debug> EliminationLayerOld<T> {
     fn new(max_threads: usize, collision_size: usize) -> Self {
         let mut collisions = Vec::with_capacity(collision_size);
         for _ in 0..collision_size {
@@ -154,7 +259,7 @@ impl<T: Debug> EliminationLayer<T> {
         }
     }
 
-    fn try_eliminate(&self, my_info_ptr: *mut OpInfo<T>) -> Result<Option<T>, OpInfo<T>> {
+    fn try_eliminate_old(&self, my_info_ptr: *mut OpInfoOld<T>) -> Result<Option<T>, OpInfoOld<T>> {
         println!("{:?} Let's eliminate", thread::current().id());
         
         unsafe {
@@ -174,7 +279,7 @@ impl<T: Debug> EliminationLayer<T> {
             }
         }
         println!("{:?} Retrieved info", thread::current().id());
-        let mut their_info_option: Option<&AtomicPtr<OpInfo<T>>> = None;
+        let mut their_info_option: Option<&AtomicPtr<OpInfoOld<T>>> = None;
         unsafe {
             if (*them).is_none() {
                 println!("{:?} Failed, they have no info", thread::current().id());
@@ -196,12 +301,12 @@ impl<T: Debug> EliminationLayer<T> {
                 let my_atomic = self.operations.get().as_mut().unwrap().get(&thread::current().id()).unwrap();
                 if my_atomic.compare_exchange_weak(
                                 my_info_ptr, 
-                                OpInfo::new_none_as_pointer(my_info.node), 
+                                OpInfoOld::new_none_as_pointer(my_info.node), 
                                 Ordering::AcqRel,
                                 Ordering::Acquire).is_ok() {
                     if their_atomic.compare_exchange_weak(
                                         their_info_ptr,
-                                        OpInfo::new_none_as_pointer(my_info.node),
+                                        OpInfoOld::new_none_as_pointer(my_info.node),
                                         Ordering::AcqRel,
                                         Ordering::Acquire).is_ok() {
                         println!("{:?} Eliminated active!", thread::current().id());
@@ -233,7 +338,7 @@ impl<T: Debug> EliminationLayer<T> {
             let my_atomic = self.operations.get().as_mut().unwrap().get(&thread::current().id()).unwrap();
             if my_atomic.compare_exchange_weak(
                             my_info_ptr,
-                            OpInfo::new_none_as_pointer(my_info.node),
+                            OpInfoOld::new_none_as_pointer(my_info.node),
                             Ordering::AcqRel,
                             Ordering::Acquire).is_err() {
                 println!("{:?} Eliminated passive!", thread::current().id());
@@ -260,9 +365,9 @@ impl<T: Debug> EliminationLayer<T> {
     }
 }
 
-impl<T: Debug> OpInfo<T> {
+impl<T: Debug> OpInfoOld<T> {
     fn new_from_pointer(node: *mut Node<T>, op: OpType) -> Self {
-        OpInfo {
+        OpInfoOld {
             operation: Some(op),
             node
         }
@@ -270,7 +375,7 @@ impl<T: Debug> OpInfo<T> {
 
     fn new_as_pointer(node: *mut Node<T>, op: OpType) -> *mut Self {
         Box::into_raw(Box::new({
-            OpInfo {
+            OpInfoOld {
                 operation: Some(op),
                 node
             }
@@ -279,7 +384,7 @@ impl<T: Debug> OpInfo<T> {
 
     fn new_none_as_pointer(node: *mut Node<T>) -> *mut Self {
         Box::into_raw(Box::new({
-            OpInfo {
+            OpInfoOld {
                 operation: None,
                 node
             }
@@ -287,7 +392,7 @@ impl<T: Debug> OpInfo<T> {
     }
 
     fn new_from_data(data: T, op: OpType) -> Self {
-        OpInfo {
+        OpInfoOld {
             operation: Some(op),
             node: Node::new_as_pointer(data)
         }
@@ -321,7 +426,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn test_push_single_threaded() {
         let mut stack : Stack<u8> = Stack::new();
 
@@ -339,7 +443,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn test_pop_single_threaded() {
         let mut stack : Stack<Foo> = Stack::new();
 
@@ -358,7 +461,6 @@ mod tests {
         println!("{:?}", stack.manager);
     }
 
-    #[test]
     #[ignore]
     fn test_thread_id() {
         for i in 0..10 {
