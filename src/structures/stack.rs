@@ -29,7 +29,7 @@ impl<T: Send + Debug> Stack<T> {
         Stack {
             head: AtomicPtr::default(),
             elimination: EliminationLayer::new(40, 5),
-            manager: HPBRManager::new(100, 1)
+            manager: HPBRManager::new(3000, 1)
         }
     }
 
@@ -382,7 +382,7 @@ mod tests {
                 for i in 0..10000 {
                     loop {
                         match stack_copy.pop() {
-                            Some(_) => break,
+                            Some(n) => { break},
                             None => ()
                         }
                     }
