@@ -129,7 +129,9 @@ impl<'a, T: Send + Debug> HPBRManager<T> {
         // Seems to work after very basic
         unsafe {
             //let boxed_garbage = Box::from_raw(garbage);
-            ptr::drop_in_place(garbage);
+            //ptr::read(garbage);
+            Box::from_raw(garbage);
+            //ptr::drop_in_place(garbage);
             //println!("Attempting to drop: {:?}", &boxed_garbage);
         }
     }

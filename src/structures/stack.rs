@@ -14,7 +14,7 @@ use memory::HPBRManager;
 #[derive(Debug)]
 pub struct Stack<T: Send + Debug> {
     head: AtomicPtr<Node<T>>,
-    elimination: EliminationLayerOld<T>,
+    //elimination: EliminationLayerOld<T>,
     manager: HPBRManager<Node<T>>
 }
 
@@ -28,7 +28,7 @@ impl<T: Send + Debug> Stack<T> {
     pub fn new() -> Stack<T> {
         Stack {
             head: AtomicPtr::default(),
-            elimination: EliminationLayerOld::new(40, 5),
+            //elimination: EliminationLayerOld::new(40, 5),
             manager: HPBRManager::new(3000, 1)
         }
     }
