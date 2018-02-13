@@ -204,7 +204,7 @@ struct ThreadLocalInfo<T: Send + Debug> {
     retired_number: usize
 }
 
-impl<'a, T: Send + Debug> ThreadLocalInfo<T> {
+impl<T: Send + Debug> ThreadLocalInfo<T> {
     fn new(starting_hazards: Vec<*mut HazardPointer<T>>) -> Self {
         ThreadLocalInfo {
             local_hazards: starting_hazards,
@@ -215,6 +215,18 @@ impl<'a, T: Send + Debug> ThreadLocalInfo<T> {
 
     unsafe fn get_mut_hazard_pointer(&mut self, hazard_index: usize) -> &mut HazardPointer<T> {
         &mut *self.local_hazards[hazard_index]
+    }
+}
+
+impl<T: Send + Debug> Drop for ThreadLocalInfo<T> {
+    fn drop(&mut self) {
+        // Free all nodes left over at program end
+        for garbage in self.retired_list.drain(..) {
+            unsafe {
+                Box::from_raw(garbage);
+            }
+        }
+        println!("Freed garbage");
     }
 }
 
