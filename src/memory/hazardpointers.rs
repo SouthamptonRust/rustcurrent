@@ -6,6 +6,7 @@ use std::collections::{VecDeque, HashSet};
 use std::cell::UnsafeCell;
 use std::fmt;
 use std::ptr;
+use std::mem;
 
 pub struct HPBRManager<T: Send + Debug> {
     thread_info: CachedThreadLocal<UnsafeCell<ThreadLocalInfo<T>>>,
@@ -126,7 +127,7 @@ impl<'a, T: Send + Debug> HPBRManager<T> {
 
     fn free(garbage: *mut T) {
         // Letting this box go out of scope should call Drop on the garbage
-        // Seems to work after very basic
+        // Seems to work after very basic tests
         unsafe {
             Box::from_raw(garbage);
         }
@@ -232,11 +233,9 @@ impl<T: Send + Debug> Drop for ThreadLocalInfo<T> {
                 Box::from_raw(garbage);
             }
         }
-        // Replace the local_hazards vector with an empty one
-        // Use that for freeing the hps
-        // The current hp_ptr is NOT a pointer, it's a mutable ref to a pointe
-        // Need to take ownership to free
-        for hp_ptr in &mut self.local_hazards {
+        // Need to replace the vector in the struct with an empty one to take possession of it
+        let hp_vec = mem::replace(&mut self.local_hazards, Vec::new());
+        for hp_ptr in hp_vec {
             unsafe {
                 Box::from_raw(hp_ptr);
             }

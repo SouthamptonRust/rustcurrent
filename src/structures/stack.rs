@@ -90,6 +90,23 @@ impl<T: Send + Debug> Stack<T> {
     }
 }
 
+impl<T: Debug + Send> Drop for Stack<T> {
+    // We can assume that when drop is called, the program holds no more references to the stack
+    // This means we can walk the stack, freeing all the data within
+    fn drop(&mut self) {
+        let mut current = self.head.load(Ordering::Relaxed);
+        let mut count = 0;
+        while !ptr::eq(current, ptr::null()) {
+            unsafe {
+                let next = (*current).next.load(Ordering::Relaxed);
+                Box::from_raw(current);
+                current = next;
+            }
+            count += 1;
+        }
+    }
+}
+
 impl<T: Debug> Node<T> {
     fn new_as_pointer(val: T) -> *mut Self {
         Box::into_raw(Box::new(Node {
@@ -156,27 +173,64 @@ impl<T: Debug> EliminationLayer<T> {
                           .store(op_info_ptr, Ordering::Release);
         }
 
-        let them = match self.get_eliminate_partner(thread_id) {
-            Ok(their_id) => their_id,
-            Err(_) => { return Err(OpInfo::get_boxed_node(op_info_ptr))}
-        };
+        if let Some(them) = self.get_eliminate_partner(thread_id) {
+            unsafe {
+                let mut_operations = self.get_mut_operations();
+                // We can unwrap because otherwise the thread cannot be in the collision vector
+                let me_atomic_ptr = mut_operations.get(&thread_id).unwrap();
+                let them_atomic_ptr = mut_operations.get(&them).unwrap();
+                // NEED TO PROTECT HERE
+                // it's possible for another thread to be matching on this collision and get this same pointer
+                let them_ptr = them_atomic_ptr.load(Ordering::Acquire);
+                
+                if OpType::check_complimentary(&(*op_info_ptr).operation, &(*them_ptr).operation) {
+                    if Self::try_set_info_none(me_atomic_ptr, op_info_ptr) {
+                        if Self::try_set_info_none(them_atomic_ptr, them_ptr) {
+                            // Successful
+                            let them_info = ptr::replace(them_ptr, OpInfo::default());
+                            
+                            // retire the op_info
+                            return Ok(them_info.node.data);
 
+                            // NEED TO RETIRE HERE
+                            // Other thread should take care of retiring "my" opinfo
+                        }
+                        // get_boxed_node should retire the record
+                        let node = OpInfo::get_boxed_node(op_info_ptr);
+                        return Err(node);
+                        // Different elimination happened
+                    }
+
+                    let them_info = ptr::replace(them_ptr, OpInfo::default());
+                    // Retire the them_ptr
+                    return Ok(them_info.node.data);
+                    // Already been eliminated, success
+                }
+            }       
+        }
+
+        // Down here is the passive elimination section
+        
         Ok(None)
     }
 
-    fn get_eliminate_partner(&self, me: thread::ThreadId) -> Result<thread::ThreadId, ()> {
+    fn get_eliminate_partner(&self, me: thread::ThreadId) -> Option<thread::ThreadId> {
         let position = self.choose_position();
         let me_ptr = Box::into_raw(Box::new(Some(me)));
         unsafe {
             loop {
                 let them_ptr = self.collisions[position].load(Ordering::Acquire);
                 if let Ok(them_ptr) = self.collisions[position].compare_exchange_weak(them_ptr, me_ptr, Ordering::AcqRel, Ordering::Release) {
-                    return match *them_ptr {
-                        Some(id) => Ok(id),
-                        None => Err(())
-                    }
+                    return *them_ptr
                 }
             }
+        }
+    }
+
+    fn try_set_info_none(me_atomic :&AtomicPtr<OpInfo<T>>, me_ptr: *mut OpInfo<T>) -> bool {
+        match me_atomic.compare_exchange_weak(me_ptr, Box::into_raw(Box::default()), Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => true,
+            Err(_) => false
         }
     }
 
@@ -229,13 +283,6 @@ impl<T: Debug> Default for OpInfo<T> {
     }
 }
 
-#[derive(Clone)]
-#[derive(Debug)]
-struct OpInfoOld<T: Debug> {
-    operation: Option<OpType>,
-    node: *mut Node<T>
-}
-
 #[derive(Debug)]
 #[derive(Clone)]
 enum OpType {
@@ -243,6 +290,24 @@ enum OpType {
     Push,
     Done
 }
+
+impl OpType {
+    fn check_complimentary(op1: &OpType, op2: &OpType) -> bool {
+        match (op1, op2) {
+            (&OpType::Push, &OpType::Pop) => true,
+            (&OpType::Pop, &OpType::Push) => true,
+            (_, _) => false
+        }
+    }
+}
+
+#[derive(Clone)]
+#[derive(Debug)]
+struct OpInfoOld<T: Debug> {
+    operation: Option<OpType>,
+    node: *mut Node<T>
+}
+
 
 
 
