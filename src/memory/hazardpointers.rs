@@ -87,12 +87,16 @@ impl<'a, T: Send + Debug> HPBRManager<T> {
         }
     }
 
+    pub fn unprotect(&self, hazard_num: usize) {
+        unsafe {
+            let thread_info_mut = self.get_mut_thread_info();
+            thread_info_mut.get_mut_hazard_pointer(hazard_num).unprotect();
+        }
+    }
+
     /// Where the main deletion aspect of the HBPRManager takes place
     /// Deletes any retired nodes of this thread which are not protected by hazard pointers
     fn scan(&self) {
-        println!("-------------------------------");
-        println!("           SCANNING            ");
-        println!("-------------------------------");
         let mut hazard_set: HashSet<*mut T> = HashSet::new();
         let mut current = self.head.load(Ordering::Relaxed);
 
@@ -118,11 +122,9 @@ impl<'a, T: Send + Debug> HPBRManager<T> {
                     Self::free(ptr);
                 }
             }
-            println!("DELETED: {}", thread_info.retired_number - new_retired_list.len());
             thread_info.retired_number = new_retired_list.len();
             thread_info.retired_list = Box::new(new_retired_list);
         }
-        println!("FINISHED SCANNING");
     }
 
     fn free(garbage: *mut T) {
