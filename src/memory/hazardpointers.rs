@@ -157,6 +157,12 @@ struct HazardPointer<T: Send + Debug> {
     active: AtomicBool
 }
 
+impl<T: Send + Debug> Drop for HazardPointer<T> {
+    fn drop(&mut self) {
+        println!("Dropping hazard pointer");
+    }
+}
+
 impl<T: Send + Debug> HazardPointer<T> {
     fn new() -> Self {
         HazardPointer {
@@ -226,7 +232,15 @@ impl<T: Send + Debug> Drop for ThreadLocalInfo<T> {
                 Box::from_raw(garbage);
             }
         }
-        println!("Freed garbage");
+        // Replace the local_hazards vector with an empty one
+        // Use that for freeing the hps
+        // The current hp_ptr is NOT a pointer, it's a mutable ref to a pointe
+        // Need to take ownership to free
+        for hp_ptr in &mut self.local_hazards {
+            unsafe {
+                Box::from_raw(hp_ptr);
+            }
+        }
     }
 }
 
