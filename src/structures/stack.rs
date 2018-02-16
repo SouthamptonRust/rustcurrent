@@ -163,7 +163,7 @@ impl<T: Debug + Send> EliminationLayer<T> {
             operations: UnsafeCell::new(HashMap::with_capacity(max_threads)),
             collisions,
             collision_size,
-            manager: HPBRManager::new(1, 2)
+            manager: HPBRManager::new(1, 3)
         }
     }
 
@@ -171,8 +171,8 @@ impl<T: Debug + Send> EliminationLayer<T> {
     fn try_eliminate(&self, op: OpType, node: Box<Node<T>>) -> Result<Option<T>, Box<Node<T>>> {
         println!("{:?} Eliminating", thread::current().id());
         let op_info_ptr = OpInfo::new_as_ptr(op.clone(), node);
-        self.manager.protect(op_info_ptr, 0);
         let thread_id = thread::current().id();
+        self.manager.protect(op_info_ptr, 0);
 
         unsafe {
             let mut_operations = self.get_mut_operations();
@@ -181,7 +181,7 @@ impl<T: Debug + Send> EliminationLayer<T> {
                                               .swap(op_info_ptr, Ordering::Release);
             // Free the old entry, it cannot be accessed
             if !ptr::eq(old_info_ptr, ptr::null()) {
-                Box::from_raw(old_info_ptr);
+                //self.manager.retire(old_info_ptr, 2);
             }
         }
 
@@ -203,7 +203,6 @@ impl<T: Debug + Send> EliminationLayer<T> {
                             // Successful
                             // I now own the them_ptr and need to free it
                             // I also need to free my op_info
-                            self.manager.retire(op_info_ptr, 0);
                             println!("Success: {:?} with {:?}", thread_id, them);
                             return Ok(self.get_data(them_ptr, &op));
 
@@ -212,7 +211,6 @@ impl<T: Debug + Send> EliminationLayer<T> {
                         // get_boxed_node should retire the OpInfo
                         self.manager.unprotect(1);
                         let node = OpInfo::get_boxed_node(op_info_ptr);
-                        self.manager.retire(op_info_ptr, 0);
                         println!("Failed: {:?} with {:?}", thread_id, them);
                         return Err(node);
                         // Different elimination happened
@@ -220,7 +218,7 @@ impl<T: Debug + Send> EliminationLayer<T> {
                     println!("Success: {:?} with {:?}", thread_id, them);
                     // Can't read from op_info_ptr, as it will point to dummy data
                     // opinfo ptr has been swapped out here
-                    self.manager.retire(op_info_ptr, 0);
+                    self.manager.unprotect(1);
                     return Ok(self.get_data(mut_operations.get(&thread_id).unwrap().load(Ordering::Acquire), &op));
                     // Already been eliminated, success
                 }
@@ -284,13 +282,16 @@ impl<T: Debug + Send> EliminationLayer<T> {
     fn get_data(&self, ptr: *mut OpInfo<T>, op: &OpType) -> Option<T> {
         match op {
             &OpType::Push => {
+                self.manager.unprotect(0);
+                self.manager.unprotect(1);
                 None
             },
             &OpType::Pop => {
                 unsafe {
                     let info = ptr::replace(ptr, OpInfo::default());
                     let node = ptr::replace(info.node, Node::default());
-
+                    //self.manager.retire(ptr, 1);
+                    //self.manager.retire(info.node, 1);
                     return node.data
                 }
             },
@@ -335,6 +336,7 @@ impl<T: Debug + Send> OpInfo<T> {
     }
 
     fn new_as_ptr(operation: OpType, node: Box<Node<T>>) -> *mut Self {
+        println!("{:?}", node);
         Box::into_raw(Box::new(OpInfo {
             operation,
             node: Box::into_raw(node)
@@ -452,7 +454,7 @@ mod tests {
 
     #[test]
     fn test_elimination_no_segfault() {
-        let stack: Arc<Stack<u8>> = Arc::new(Stack::new());
+        let stack: Arc<Stack<u8>> = Arc::new(Stack::new(true));
         let mut waitvec: Vec<thread::JoinHandle<()>> = Vec::new();
         for _ in 0..20 {
             let stack_copy = stack.clone();
