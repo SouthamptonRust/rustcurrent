@@ -38,11 +38,14 @@ impl<T: Send + Debug> Stack<T> {
 
     pub fn push(&self, val: T) {
         let mut node = Box::new(Node::new(val));
+        let mut elim_number = 0;
         loop {
             node = match self.try_push(node) {
                 Ok(_) => { return; }
                 Err(old_node) => old_node
             };
+            elim_number += 1;
+            println!("Thread {:?} trying elimination number {}", thread::current().id(), elim_number);
             if self.elimination_on {
                 let mut data = mem::replace(&mut node.data, None);
                 data = match self.elimination.try_eliminate(OpType::Push, data) {
@@ -173,8 +176,97 @@ impl<T: Debug + Send> EliminationLayer<T> {
         }
     }
 
-    // TODO finish writing this 
+    // TODO finish writing this
     fn try_eliminate(&self, op: OpType, data: Option<T>) -> Result<Option<T>, Option<T>> {
+        let op_info = OpInfo::new(op.clone(), data);
+        let op_info_ptr = Box::into_raw(Box::new(op_info));
+        let thread_id = thread::current().id();
+
+        unsafe {
+            let operations = self.get_mut_operations();
+            operations.entry(thread_id)
+                      .or_insert(AtomicPtr::default())
+                      .store(op_info_ptr, Ordering::Release);
+        }
+
+        let them_pos = self.choose_position();
+        let mut them_ptr = ptr::null_mut();
+        loop {
+            them_ptr = self.collisions[them_pos].load(Ordering::Acquire);
+            let me = Box::into_raw(Box::new(Some(thread_id)));
+            if self.collisions[them_pos].compare_exchange_weak(them_ptr, me, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+                break;
+            }
+        }
+
+        unsafe {
+            let them = match *them_ptr {
+                Some(id) => id,
+                None => {
+                    let my_info = ptr::replace(op_info_ptr, OpInfo::default());
+                    let data = ptr::replace(my_info.data, None);
+                    return Err(data);
+                }
+            };
+            let operations = self.get_mut_operations();
+            let them_atomic = operations.get(&them).unwrap();
+            let them_info_ptr = them_atomic.load(Ordering::Acquire);
+
+            if OpType::check_complimentary(op.clone(), (*them_info_ptr).operation.clone()) {
+                let me_atomic = operations.get(&thread_id).unwrap();
+                let mut new_none = OpInfo::new_none_as_pointer((*op_info_ptr).data);
+                if me_atomic.compare_exchange_weak(op_info_ptr, new_none, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+                    new_none = OpInfo::new_none_as_pointer((*op_info_ptr).data);
+                    if them_atomic.compare_exchange_weak(them_info_ptr, new_none, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+                        println!("{:?} eliminated active with {:?}", thread_id, them);
+
+                        let info = ptr::replace(them_info_ptr, OpInfo::default());
+                        let data = ptr::replace(info.data, None);
+
+                        return Ok(data);
+                    } else {
+                        println!("{:?} failed to eliminate active", thread_id);
+
+                        let my_info = ptr::replace(op_info_ptr, OpInfo::default());
+                        let data = ptr::replace(my_info.data, None);
+
+                        return Err(data);
+                    } 
+                } else {
+                    println!("{:?} eliminated passive!", thread_id);
+
+                    let info_ptr = me_atomic.load(Ordering::Acquire);
+                    let new_info = ptr::replace(info_ptr, OpInfo::default());
+                    let data = ptr::replace(new_info.data, None);
+
+                    return Ok(data);
+                }
+            }
+        }
+
+        thread::sleep(Duration::from_millis(20));
+
+        unsafe {
+            let operations = self.get_mut_operations();
+            let me_atomic = operations.get(&thread_id).unwrap();
+            
+            if me_atomic.compare_exchange_weak(op_info_ptr, OpInfo::new_none_as_pointer((*op_info_ptr).data), Ordering::AcqRel, Ordering::Acquire).is_err() {
+                println!("{:?} eliminated passive!", thread_id);
+
+                let info_ptr = me_atomic.load(Ordering::Acquire);
+                let new_info = ptr::replace(info_ptr, OpInfo::default());
+                let data = ptr::replace(new_info.data, None);
+
+                return Ok(data);
+            }
+        let my_info = ptr::replace(op_info_ptr, OpInfo::default());
+        let data = ptr::replace(my_info.data, None);
+
+        Err(data)
+        }
+    } 
+
+    fn try_eliminate_old(&self, op: OpType, data: Option<T>) -> Result<Option<T>, Option<T>> {
         println!("{:?} Eliminating", thread::current().id());
         let op_info_ptr = OpInfo::new_as_ptr(op.clone(), data);
         let thread_id = thread::current().id();
@@ -183,13 +275,13 @@ impl<T: Debug + Send> EliminationLayer<T> {
         unsafe {
             println!("My OpInfo: {:?} -------- {:?}", *op_info_ptr, thread_id);
             let mut_operations = self.get_mut_operations();
-            let old_info_ptr = mut_operations.entry(thread_id)
+            mut_operations.entry(thread_id)
                                               .or_insert(AtomicPtr::default())
-                                              .swap(op_info_ptr, Ordering::Release);
+                                              .store(op_info_ptr, Ordering::Release);
             // Free the old entry, it cannot be accessed
-            if !ptr::eq(old_info_ptr, ptr::null()) {
+            //if !ptr::eq(old_info_ptr, ptr::null()) {
                 //self.manager.retire(old_info_ptr, 2);
-            }
+            //}
         }
 
         if let Some(them) = self.get_eliminate_partner(thread_id) {
@@ -204,7 +296,8 @@ impl<T: Debug + Send> EliminationLayer<T> {
                 let them_ptr = them_atomic_ptr.load(Ordering::Acquire);
                 self.manager.protect(them_ptr, 1);
                 
-                if OpType::check_complimentary(&(*op_info_ptr).operation, &(*them_ptr).operation) {
+                if OpType::check_complimentary((*op_info_ptr).operation.clone(), (*them_ptr).operation.clone()) {
+                    println!("My {:?} op is: {:?}, their {:?} op is: {:?}", thread_id, &(*op_info_ptr).operation, them, &(*them_ptr).operation);
                     if Self::try_swap_info_me(me_atomic_ptr, op_info_ptr) {
                         println!("Their info is: {:?} ----- {:?}", *them_ptr, thread_id);
                         if Self::try_swap_info_them(them_atomic_ptr, them_ptr, op_info_ptr) {
@@ -216,20 +309,22 @@ impl<T: Debug + Send> EliminationLayer<T> {
                             return Ok(self.get_data(them_ptr, &op));
 
                             // NEED TO RETIRE HERE
+                        } else {
+                            // get_boxed_node should retire the OpInfo
+                            self.manager.unprotect(1);
+                            let node = OpInfo::get_boxed_node(op_info_ptr);
+                            println!("Failed: {:?} with {:?}", thread_id, them);
+                            return Err(node);
+                            // Different elimination happened
                         }
-                        // get_boxed_node should retire the OpInfo
+                    } else {
+                        println!("Success: {:?} with {:?}", thread_id, them);
+                        // Can't read from op_info_ptr, as it will point to dummy data
+                        // opinfo ptr has been swapped out here
                         self.manager.unprotect(1);
-                        let node = OpInfo::get_boxed_node(op_info_ptr);
-                        println!("Failed: {:?} with {:?}", thread_id, them);
-                        return Err(node);
-                        // Different elimination happened
+                        return Ok(self.get_data(mut_operations.get(&thread_id).unwrap().load(Ordering::Acquire), &op));
+                        // Already been eliminated, success
                     }
-                    println!("Success: {:?} with {:?}", thread_id, them);
-                    // Can't read from op_info_ptr, as it will point to dummy data
-                    // opinfo ptr has been swapped out here
-                    self.manager.unprotect(1);
-                    return Ok(self.get_data(mut_operations.get(&thread_id).unwrap().load(Ordering::Acquire), &op));
-                    // Already been eliminated, success
                 }
             }       
         }
@@ -252,10 +347,11 @@ impl<T: Debug + Send> EliminationLayer<T> {
                 return Ok(self.get_data(me_atomic_ptr.load(Ordering::Acquire), &op));
                 // Elimination has happened
             }
+            // Elimination failed
+            println!("Failed: {:?} passively", thread_id);
+            Err(OpInfo::get_boxed_node(op_info_ptr))
         }
-        // Elimination failed
-        println!("Failed: {:?} passively", thread_id);
-        Err(OpInfo::get_boxed_node(op_info_ptr))
+        
     }
 
     fn get_eliminate_partner(&self, me: thread::ThreadId) -> Option<thread::ThreadId> {
@@ -264,8 +360,8 @@ impl<T: Debug + Send> EliminationLayer<T> {
         unsafe {
             loop {
                 let them_ptr = self.collisions[position].load(Ordering::Acquire);
-                if let Ok(them_ptr) = self.collisions[position].compare_exchange_weak(them_ptr, me_ptr, Ordering::AcqRel, Ordering::Acquire) {
-                    return *them_ptr
+                if let Ok(ptr) = self.collisions[position].compare_exchange_weak(them_ptr, me_ptr, Ordering::AcqRel, Ordering::Acquire) {
+                    return *ptr
                 }
             }
         }
@@ -364,6 +460,7 @@ impl<T: Debug + Send> OpInfo<T> {
     // Should probably free the opinfo pointer
     fn get_boxed_node(opinfo_ptr: *mut Self) -> Option<T> {
         unsafe {
+            println!("Getting box node for thread: {:?} ------ op info is: {:?}", thread::current().id(), *opinfo_ptr);
             let opinfo = ptr::replace(opinfo_ptr, OpInfo::default());
             println!("{:?}", opinfo);
             ptr::replace(opinfo.data, None)
@@ -379,13 +476,20 @@ impl<T: Debug + Send> OpInfo<T> {
             }))
         }
     }
+
+    fn new_none_as_pointer(data: *mut Option<T>) -> *mut Self {
+        Box::into_raw(Box::new(OpInfo {
+            operation: OpType::Done,
+            data
+        }))
+    }
 }
 
 impl<T: Debug + Send> Default for OpInfo<T> {
     fn default() -> Self {
         OpInfo {
             operation: OpType::Done,
-            data: ptr::null_mut()
+            data: Box::into_raw(Box::default())
         }
     }
 }
@@ -399,10 +503,10 @@ enum OpType {
 }
 
 impl OpType {
-    fn check_complimentary(op1: &OpType, op2: &OpType) -> bool {
+    fn check_complimentary(op1: OpType, op2: OpType) -> bool {
         match (op1, op2) {
-            (&OpType::Push, &OpType::Pop) => true,
-            (&OpType::Pop, &OpType::Push) => true,
+            (OpType::Push, OpType::Pop) => true,
+            (OpType::Pop, OpType::Push) => true,
             (_, _) => false
         }
     }
