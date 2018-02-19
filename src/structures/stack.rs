@@ -8,6 +8,9 @@ use std::cell::UnsafeCell;
 use rand::{Rng};
 use rand;
 use memory::HPBRManager;
+use std::mem;
+
+// TODO - find out why data starts to set itself to impossible address - check address of data at literally every stage
 
 #[derive(Debug)]
 pub struct Stack<T: Send + Debug> {
@@ -40,12 +43,15 @@ impl<T: Send + Debug> Stack<T> {
                 Ok(_) => { return; }
                 Err(old_node) => old_node
             };
-            if self.elimination_on { 
-                node = match self.elimination.try_eliminate(OpType::Push, node) {
+            if self.elimination_on {
+                let mut data = mem::replace(&mut node.data, None);
+                data = match self.elimination.try_eliminate(OpType::Push, data) {
                     Ok(_) => { return; }
                     Err(old_node) => old_node
                 };
+                node.data = data;
             }
+            println!("Fail node: {:?} for thread {:?}", node, thread::current().id());
         }
     }
 
@@ -70,7 +76,7 @@ impl<T: Send + Debug> Stack<T> {
                 return val
             }
             if self.elimination_on {
-                if let Ok(val) = self.elimination.try_eliminate(OpType::Pop, Box::default()) {
+                if let Ok(val) = self.elimination.try_eliminate(OpType::Pop, None) {
                     return val
                 }
             }
@@ -168,13 +174,14 @@ impl<T: Debug + Send> EliminationLayer<T> {
     }
 
     // TODO finish writing this 
-    fn try_eliminate(&self, op: OpType, node: Box<Node<T>>) -> Result<Option<T>, Box<Node<T>>> {
+    fn try_eliminate(&self, op: OpType, data: Option<T>) -> Result<Option<T>, Option<T>> {
         println!("{:?} Eliminating", thread::current().id());
-        let op_info_ptr = OpInfo::new_as_ptr(op.clone(), node);
+        let op_info_ptr = OpInfo::new_as_ptr(op.clone(), data);
         let thread_id = thread::current().id();
         self.manager.protect(op_info_ptr, 0);
 
         unsafe {
+            println!("My OpInfo: {:?} -------- {:?}", *op_info_ptr, thread_id);
             let mut_operations = self.get_mut_operations();
             let old_info_ptr = mut_operations.entry(thread_id)
                                               .or_insert(AtomicPtr::default())
@@ -199,7 +206,9 @@ impl<T: Debug + Send> EliminationLayer<T> {
                 
                 if OpType::check_complimentary(&(*op_info_ptr).operation, &(*them_ptr).operation) {
                     if Self::try_swap_info_me(me_atomic_ptr, op_info_ptr) {
+                        println!("Their info is: {:?} ----- {:?}", *them_ptr, thread_id);
                         if Self::try_swap_info_them(them_atomic_ptr, them_ptr, op_info_ptr) {
+                            println!("Their info is now: {:?} ----- {:?}", *them_ptr, thread_id);
                             // Successful
                             // I now own the them_ptr and need to free it
                             // I also need to free my op_info
@@ -230,6 +239,14 @@ impl<T: Debug + Send> EliminationLayer<T> {
 
         unsafe {
             let me_atomic_ptr = self.get_mut_operations().get(&thread_id).unwrap();
+            match me_atomic_ptr.compare_exchange_weak(op_info_ptr, OpInfo::create_none_opinfo(op_info_ptr), Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) => {
+                    return Err(OpInfo::get_boxed_node(op_info_ptr));
+                },
+                Err(_) => {
+                    return Ok(self.get_data(me_atomic_ptr.load(Ordering::Acquire), &op));
+                }
+            }
             if !Self::try_swap_info_me(me_atomic_ptr, op_info_ptr) {
                 println!("Success: {:?} passively", thread_id);
                 return Ok(self.get_data(me_atomic_ptr.load(Ordering::Acquire), &op));
@@ -288,11 +305,12 @@ impl<T: Debug + Send> EliminationLayer<T> {
             },
             &OpType::Pop => {
                 unsafe {
+                    println!("Using opinfo: {:?}, {:?}", *ptr, thread::current().id());
                     let info = ptr::replace(ptr, OpInfo::default());
-                    let node = ptr::replace(info.node, Node::default());
-                    //self.manager.retire(ptr, 1);
-                    //self.manager.retire(info.node, 1);
-                    return node.data
+                    println!("{:?}", info.data);
+                    let data = ptr::replace(info.data, None);
+                    self.manager.retire(ptr, 1);
+                    return data
                 }
             },
             &OpType::Done => {
@@ -316,7 +334,7 @@ impl<T: Debug + Send> EliminationLayer<T> {
 #[derive(Debug)]
 struct OpInfo<T: Debug + Send> {
     operation: OpType,
-    node: *mut Node<T>
+    data: *mut Option<T>
 }
 
 impl<T: Debug + Send> Drop for OpInfo<T> {
@@ -328,35 +346,36 @@ impl<T: Debug + Send> Drop for OpInfo<T> {
 unsafe impl<T: Debug + Send> Send for OpInfo<T> {}
 
 impl<T: Debug + Send> OpInfo<T> {
-    fn new(operation: OpType, node: Box<Node<T>>) -> Self {
+    fn new(operation: OpType, data: Option<T>) -> Self {
         OpInfo {
             operation,
-            node: Box::into_raw(node)
+            data: Box::into_raw(Box::new(data))
         }
     }
 
-    fn new_as_ptr(operation: OpType, node: Box<Node<T>>) -> *mut Self {
-        println!("{:?}", node);
+    fn new_as_ptr(operation: OpType, data: Option<T>) -> *mut Self {
+        let data_ptr = Box::into_raw(Box::new(data));
         Box::into_raw(Box::new(OpInfo {
             operation,
-            node: Box::into_raw(node)
+            data: data_ptr
         }))
     }
 
     // Should probably free the opinfo pointer
-    fn get_boxed_node(opinfo_ptr: *mut Self) -> Box<Node<T>> {
+    fn get_boxed_node(opinfo_ptr: *mut Self) -> Option<T> {
         unsafe {
             let opinfo = ptr::replace(opinfo_ptr, OpInfo::default());
-            Box::from_raw(opinfo.node)
+            println!("{:?}", opinfo);
+            ptr::replace(opinfo.data, None)
         }
     }
 
     fn create_none_opinfo(opinfo_ptr: *mut Self) -> *mut Self {
         unsafe {
-            let node_ptr = (*opinfo_ptr).node;
+            let node_ptr = (*opinfo_ptr).data;
             Box::into_raw(Box::new(OpInfo {
                 operation: OpType::Done,
-                node: node_ptr
+                data: node_ptr
             }))
         }
     }
@@ -366,7 +385,7 @@ impl<T: Debug + Send> Default for OpInfo<T> {
     fn default() -> Self {
         OpInfo {
             operation: OpType::Done,
-            node: ptr::null_mut()
+            data: ptr::null_mut()
         }
     }
 }
