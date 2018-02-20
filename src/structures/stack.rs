@@ -77,6 +77,7 @@ impl<T: Send + Debug> Stack<T> {
             }
             if self.elimination_on {
                 if let Ok(val) = self.elimination.try_eliminate(OpType::Pop, None) {
+                    println!("{:?}", val);
                     return val
                 }
             }
@@ -172,9 +173,11 @@ impl<T: Debug + Send> Drop for EliminationLayer<T> {
             }
 
             // Clear out the collision vector
-            for ptr in self.collisions.iter() {
+            let tmp_collisions = mem::replace(&mut self.collisions, Vec::new());
+            for atomic_ptr in tmp_collisions {
+                let ptr = atomic_ptr.load(Ordering::Relaxed);
                 if !ptr::eq(ptr, ptr::null()) {
-                    Box::from_raw(ptr.load(Ordering::Relaxed));
+                    Box::from_raw(ptr);
                 }
             }
         }
@@ -191,7 +194,7 @@ impl<T: Debug + Send> EliminationLayer<T> {
             operations: UnsafeCell::new(HashMap::with_capacity(max_threads)),
             collisions,
             collision_size,
-            manager: HPBRManager::new(1, 3)
+            manager: HPBRManager::new(20, 3)
         }
     }
 
@@ -217,73 +220,85 @@ impl<T: Debug + Send> EliminationLayer<T> {
             if self.collisions[them_pos].compare_exchange_weak(them_ptr, me, Ordering::AcqRel, Ordering::Acquire).is_ok() {
                 break;
             }
+            println!("I'm stuck");
         }
-
+        // can't do early returns!
         unsafe {
-            let them = match *them_ptr {
-                Some(id) => id,
-                None => {
-                    let my_info = ptr::replace(op_info_ptr, OpInfo::default());
-                    let data = ptr::replace(my_info.data, None);
-                    return Err(data);
+            if let Some(them) = *them_ptr {
+                Box::from_raw(them_ptr);
+                let operations = self.get_mut_operations();
+                let them_atomic = operations.get(&them).unwrap();
+                let mut them_info_ptr = them_atomic.load(Ordering::Acquire);
+                self.manager.protect(them_info_ptr, 1);
+                // Need to check we're protecting the right pointer here
+                loop {
+                    if ptr::eq(them_info_ptr, them_atomic.load(Ordering::Acquire)) {
+                        break;
+                    }
+                    them_info_ptr = them_atomic.load(Ordering::Acquire);
+                    self.manager.protect(them_info_ptr, 1);
                 }
-            };
-            let operations = self.get_mut_operations();
-            let them_atomic = operations.get(&them).unwrap();
-            let them_info_ptr = them_atomic.load(Ordering::Acquire);
-            self.manager.protect(them_info_ptr, 1);
+                // Them info ptr is being deleted before it can be read. 
+                if OpType::check_complimentary(op.clone(), (*them_info_ptr).operation.clone()) {
+                    let me_atomic = operations.get(&thread_id).unwrap();
+                    let mut new_none = OpInfo::new_done_as_pointer((*op_info_ptr).data);
+                    if me_atomic.compare_exchange_weak(op_info_ptr, new_none, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+                        new_none = OpInfo::new_done_as_pointer((*op_info_ptr).data);
+                        if them_atomic.compare_exchange_weak(them_info_ptr, new_none, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+                            println!("{:?} eliminated active with {:?}", thread_id, them);
+                            
+                            // Can retire our info, since the one in the data structure is "new_none"
+                            self.manager.retire(op_info_ptr, 0);
 
-            if OpType::check_complimentary(op.clone(), (*them_info_ptr).operation.clone()) {
-                let me_atomic = operations.get(&thread_id).unwrap();
-                let mut new_none = OpInfo::new_done_as_pointer((*op_info_ptr).data);
-                if me_atomic.compare_exchange_weak(op_info_ptr, new_none, Ordering::AcqRel, Ordering::Acquire).is_ok() {
-                    new_none = OpInfo::new_done_as_pointer((*op_info_ptr).data);
-                    if them_atomic.compare_exchange_weak(them_info_ptr, new_none, Ordering::AcqRel, Ordering::Acquire).is_ok() {
-                        println!("{:?} eliminated active with {:?}", thread_id, them);
-                        
-                        // Can retire our info, since the one in the data structure is "new_none"
-                        self.manager.retire(op_info_ptr, 0);
+                            // Take ownership of their info, since the one in the structure is "new_none"
+                            let info = ptr::replace(them_info_ptr, OpInfo::default());
+                            self.manager.retire(them_info_ptr, 1);
+                            return match &op {
+                                &OpType::Done => { panic!("Invalid operation type")}
+                                &OpType::Push => Ok(None),
+                                &OpType::Pop => {
+                                    let data = ptr::replace(info.data, None);
+                                    // Delete the empty data
+                                    Box::from_raw(info.data);
+                                    Ok(data)
+                                }
+                            };
+                        } else {
+                            println!("{:?} failed to eliminate active", thread_id);
 
-                        // Take ownership of their info, since the one in the structure is "new_none"
-                        let info = ptr::replace(them_info_ptr, OpInfo::default());
-                        self.manager.retire(them_info_ptr, 1);
-
-                        let data = ptr::replace(info.data, None);
-                        // Delete the empty data
-                        Box::from_raw(info.data);
-
-                        return Ok(data);
+                            // Free the unused none_ptr
+                            Box::from_raw(new_none);
+                            // Don't need to protect them_ptr anymore
+                            self.manager.unprotect(1);
+                            
+                            // Free our info, since the one in the data structure is "new_none"
+                            let my_info = ptr::replace(op_info_ptr, OpInfo::default());
+                            self.manager.retire(op_info_ptr, 0);
+                            let data = ptr::replace(my_info.data, None);
+                            Box::from_raw(my_info.data);
+                            return Err(data);
+                        } 
                     } else {
-                        println!("{:?} failed to eliminate active", thread_id);
-
-                        // Free the unused none_ptr
+                        println!("{:?} eliminated passive!", thread_id);
+                        // If my info has been swapped out, then someone else will have freed my info
+                        // Free the unused none ptr
                         Box::from_raw(new_none);
-                        // Don't need to protect them_ptr anymore
-                        self.manager.unprotect(1);
                         
-                        // Free our info, since the one in the data structure is "new_none"
-                        let my_info = ptr::replace(op_info_ptr, OpInfo::default());
-                        self.manager.retire(op_info_ptr, 0);
-                        let data = ptr::replace(my_info.data, None);
-                        Box::from_raw(my_info.data);
-                        return Err(data);
-                    } 
-                } else {
-                    println!("{:?} eliminated passive!", thread_id);
-                    // If my info has been swapped out, then someone else will have freed my info
-                    // Free the unused none ptr
-                    Box::from_raw(new_none);
-                    
-                    let info_ptr = me_atomic.load(Ordering::Acquire);
-                    self.manager.protect(info_ptr, 0);
-                    let new_info = ptr::replace(info_ptr, OpInfo::default());
-                    // Retire the info we claimed
-                    self.manager.retire(info_ptr, 0);
-
-                    let data = ptr::replace(new_info.data, None);
-                    Box::from_raw(new_info.data);
-
-                    return Ok(data);
+                        let info_ptr = me_atomic.load(Ordering::Acquire);
+                        self.manager.protect(info_ptr, 0);
+                        let new_info = ptr::replace(info_ptr, OpInfo::default());
+                        // Retire the info we claimed
+                        self.manager.retire(info_ptr, 0);
+                        return match &op {
+                            &OpType::Done => {panic!("Invalid operation type")},
+                            &OpType::Push => Ok(None),
+                            &OpType::Pop => {
+                                let data = ptr::replace(new_info.data, None);
+                                Box::from_raw(new_info.data);
+                                Ok(data)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -304,10 +319,16 @@ impl<T: Debug + Send> EliminationLayer<T> {
                 self.manager.protect(info_ptr, 0);
                 let new_info = ptr::replace(info_ptr, OpInfo::default());
                 self.manager.retire(info_ptr, 0);
-                let data = ptr::replace(new_info.data, None);
 
-                Box::from_raw(new_info.data);
-                return Ok(data);
+                return match &op {
+                    &OpType::Done => {panic!("Invalid operation type")},
+                    &OpType::Push => Ok(None),
+                    &OpType::Pop => {
+                        let data = ptr::replace(new_info.data, None);
+                        Box::from_raw(new_info.data);
+                        Ok(data)
+                    }
+                }
             } else {
                 // I swapped my info out so I'm the only one holding it
                 let my_info = ptr::replace(op_info_ptr, OpInfo::default());
@@ -332,31 +353,6 @@ impl<T: Debug + Send> EliminationLayer<T> {
         }
     }
 
-    // This function can also handle retiring
-    fn get_data(&self, ptr: *mut OpInfo<T>, op: &OpType) -> Option<T> {
-        match op {
-            &OpType::Push => {
-                self.manager.unprotect(0);
-                self.manager.unprotect(1);
-                None
-            },
-            &OpType::Pop => {
-                unsafe {
-                    println!("Using opinfo: {:?}, {:?}", *ptr, thread::current().id());
-                    let info = ptr::replace(ptr, OpInfo::default());
-                    println!("{:?}", info.data);
-                    let data = ptr::replace(info.data, None);
-                    self.manager.retire(ptr, 1);
-                    return data
-                }
-            },
-            &OpType::Done => {
-                println!("Error occurred, read incompatible op node");
-                None
-            }
-        }
-    }
-
     fn choose_position(&self) -> usize {
         return rand::thread_rng().gen_range(0, self.collision_size);
     }
@@ -375,9 +371,7 @@ struct OpInfo<T: Debug + Send> {
 }
 
 impl<T: Debug + Send> Drop for OpInfo<T> {
-    fn drop(&mut self) {
-        println!("========================== Dropping OpInfo");
-    }
+    fn drop(&mut self) {}
 }
 
 unsafe impl<T: Debug + Send> Send for OpInfo<T> {}
@@ -396,16 +390,6 @@ impl<T: Debug + Send> OpInfo<T> {
             operation,
             data: data_ptr
         }))
-    }
-
-    // Should probably free the opinfo pointer
-    fn get_boxed_node(opinfo_ptr: *mut Self) -> Option<T> {
-        unsafe {
-            println!("Getting box node for thread: {:?} ------ op info is: {:?}", thread::current().id(), *opinfo_ptr);
-            let opinfo = ptr::replace(opinfo_ptr, OpInfo::default());
-            println!("{:?}", opinfo);
-            ptr::replace(opinfo.data, None)
-        }
     }
 
     fn new_done_as_pointer(data: *mut Option<T>) -> *mut Self {

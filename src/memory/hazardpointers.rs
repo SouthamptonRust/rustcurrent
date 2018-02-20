@@ -1,5 +1,6 @@
 use memory::recordmanager::RecordManager;
 use std::sync::atomic::{AtomicPtr, Ordering, AtomicBool};
+use std::sync::atomic;
 use std::fmt::Debug;
 use thread_local::CachedThreadLocal;
 use std::collections::{VecDeque, HashSet};
@@ -82,6 +83,7 @@ impl<'a, T: Send + Debug> HPBRManager<T> {
 
     pub fn protect(&self, record: *mut T, hazard_num: usize) {
         unsafe {
+            atomic::fence(Ordering::Release);
             let thread_info_mut = self.get_mut_thread_info();
             thread_info_mut.get_mut_hazard_pointer(hazard_num).protect(record);
         }
