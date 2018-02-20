@@ -94,6 +94,17 @@ impl<'a, T: Send + Debug> HPBRManager<T> {
         }
     }
 
+    /// Should only be used in the drop function of a concurrent structure to check that a record
+    /// is not still in the hazard pointer deletion list of the manager. This will be quite slow.
+    /// Need to think of possible ways to improve this
+    pub unsafe fn check_if_hazard(&mut self, record: *mut T) -> bool {
+        for local in self.thread_info.iter_mut() {
+            let info = &*local.get();
+            if info.retired_list.contains(&record) {return true}
+        }
+        false
+    }
+
     /// Where the main deletion aspect of the HBPRManager takes place
     /// Deletes any retired nodes of this thread which are not protected by hazard pointers
     fn scan(&self) {
