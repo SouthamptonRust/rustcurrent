@@ -52,7 +52,7 @@ impl<T: Send + Debug> Queue<T> {
             // Is the tail actually the end of the queue?
             if !next.is_null() {
                 // If it isn't, try to make next the end of the queue
-                self.tail.compare_exchange_weak(tail, next, Ordering::AcqRel, Ordering::Release);
+                let _ = self.tail.compare_exchange_weak(tail, next, Ordering::AcqRel, Ordering::Release);
                 return Err(val)
             }
             let node_ptr = Box::into_raw(val);
@@ -60,7 +60,7 @@ impl<T: Send + Debug> Queue<T> {
             match (*tail).next.compare_exchange_weak(ptr::null_mut(), node_ptr, Ordering::AcqRel, Ordering::Release) {
                 Ok(_) => {
                     // Success! Set our new node to the tail
-                    self.tail.compare_exchange_weak(tail, node_ptr, Ordering::AcqRel, Ordering::Release);
+                    let _ = self.tail.compare_exchange_weak(tail, node_ptr, Ordering::AcqRel, Ordering::Release);
                     return Ok(())
                 },
                 // Failure :( try again
@@ -72,10 +72,37 @@ impl<T: Send + Debug> Queue<T> {
     }
 
     pub fn dequeue(&self) -> Option<T> {
-        None
+        loop {
+            if let Ok(val) = self.try_dequeue() {
+                return val
+            }
+        }
     }
 
     pub fn try_dequeue(&self) -> Result<Option<T>, ()> {
+        let head = self.head.load(Ordering::Acquire);
+        self.manager.protect(head, 0);
+        if !ptr::eq(head, self.head.load(Ordering::Acquire)) {
+            return Err(())
+        }
+        let tail = self.tail.load(Ordering::Acquire);
+        unsafe {
+            let next = (*head).next.load(Ordering::Acquire);
+            self.manager.protect(next, 1);
+            if !ptr::eq(head, self.head.load(Ordering::Acquire)) {
+                return Err(())
+            }
+            if next.is_null() {
+                return Ok(None)
+            }
+            // If the queue isn't empty, but head == tail, then the tail must be falling behind
+            if ptr::eq(head, tail) {
+                // Help it to catch up!
+                let _ = self.tail.compare_exchange_weak(tail, next, Ordering::AcqRel, Ordering::Acquire);
+                return Err(())
+            }
+        }
+
         Err(())
     }
 }
@@ -105,7 +132,9 @@ mod tests {
     fn test_push_single_threaded() {
         let mut queue : Queue<u8> = Queue::new();
         queue.enqueue(8);
-        assert_eq!(queue.head.load(Ordering::Relaxed), 8);
+        unsafe {
+            assert_eq!((*queue.head.load(Ordering::Relaxed)).value, Some(8));
+        }
         queue.enqueue(7);
         assert_eq!(queue.dequeue(), Some(8));
         assert_eq!(queue.dequeue(), Some(7));
