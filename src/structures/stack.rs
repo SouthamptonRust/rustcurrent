@@ -491,6 +491,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_elimination_no_segfault() {
         let stack: Arc<Stack<u8>> = Arc::new(Stack::new(true));
         let mut waitvec: Vec<thread::JoinHandle<()>> = Vec::new();

@@ -52,15 +52,15 @@ impl<T: Send + Debug> Queue<T> {
             // Is the tail actually the end of the queue?
             if !next.is_null() {
                 // If it isn't, try to make next the end of the queue
-                let _ = self.tail.compare_exchange_weak(tail, next, Ordering::AcqRel, Ordering::Release);
+                let _ = self.tail.compare_exchange_weak(tail, next, Ordering::AcqRel, Ordering::Acquire);
                 return Err(val)
             }
             let node_ptr = Box::into_raw(val);
             // Try to CAS our node onto the end of the queue
-            match (*tail).next.compare_exchange_weak(ptr::null_mut(), node_ptr, Ordering::AcqRel, Ordering::Release) {
+            match (*tail).next.compare_exchange_weak(ptr::null_mut(), node_ptr, Ordering::AcqRel, Ordering::Acquire) {
                 Ok(_) => {
                     // Success! Set our new node to the tail
-                    let _ = self.tail.compare_exchange_weak(tail, node_ptr, Ordering::AcqRel, Ordering::Release);
+                    let _ = self.tail.compare_exchange_weak(tail, node_ptr, Ordering::AcqRel, Ordering::Acquire);
                     return Ok(())
                 },
                 // Failure :( try again
@@ -101,9 +101,18 @@ impl<T: Send + Debug> Queue<T> {
                 let _ = self.tail.compare_exchange_weak(tail, next, Ordering::AcqRel, Ordering::Acquire);
                 return Err(())
             }
+            match self.head.compare_exchange_weak(head, next, Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) => {
+                    let node = Node::replace(next);
+                    let data = node.value;
+                    self.manager.retire(head, 0);
+                    return Ok(data)
+                },
+                Err(_) => {
+                    return Err(())
+                }
+            }
         }
-
-        Err(())
     }
 }
 
@@ -121,6 +130,24 @@ impl<T: Send + Debug> Node<T> {
             value: None
         }
     }
+
+    unsafe fn replace(dest: *mut Self) -> Self {
+        let next_ptr = (*dest).next.load(Ordering::Acquire);
+        let node = Node {
+            next: AtomicPtr::new(next_ptr),
+            value: None
+        };
+        ptr::replace(dest, node)
+    }
+}
+
+impl<T: Send + Debug> Default for Node<T> {
+    fn default() -> Self {
+        Node {
+            next: AtomicPtr::default(),
+            value: None
+        }
+    }
 }
 
 mod tests {
@@ -129,15 +156,63 @@ mod tests {
     use std::thread;
     use std::sync::atomic::Ordering;
 
-    fn test_push_single_threaded() {
+    #[test]
+    fn test_queue_single_threaded() {
         let mut queue : Queue<u8> = Queue::new();
         queue.enqueue(8);
         unsafe {
-            assert_eq!((*queue.head.load(Ordering::Relaxed)).value, Some(8));
+            println!("{:?}", *queue.head.load(Ordering::Relaxed));
+            let head = (*queue.head.load(Ordering::Relaxed)).next.load(Ordering::Relaxed);
+            assert_eq!((*head).value, Some(8));
         }
         queue.enqueue(7);
         assert_eq!(queue.dequeue(), Some(8));
         assert_eq!(queue.dequeue(), Some(7));
         assert_eq!(queue.dequeue(), None);
+
+        for i in 0..100 {
+            queue.enqueue(i);
+        }
+        for i in 0..100 {
+            assert_eq!(queue.dequeue(), Some(i));
+        }
+        assert_eq!(queue.dequeue(), None);
+    }
+
+    #[test]
+    fn test_queue_multithreaded() {
+        let mut queue: Arc<Queue<u32>> = Arc::new(Queue::new());
+        let mut waitvec: Vec<thread::JoinHandle<()>> = Vec::new();
+
+        for i in 0..20 {
+            let mut queue_copy = queue.clone();
+            waitvec.push(thread::spawn(move || {
+                for i in 0..10000 {
+                    queue_copy.enqueue(i);
+                }
+                //println!("Push thread {} complete", i);
+            }));
+            queue_copy = queue.clone();
+            waitvec.push(thread::spawn(move || {
+                for i in 0..10000 {
+                    loop {
+                        match queue_copy.dequeue() {
+                            Some(_) => {break},
+                            None => {} 
+                        }
+                    }
+                }
+                println!("Pop thread {} complete", i);
+            }));
+        }
+
+        for handle in waitvec {
+            match handle.join() {
+                Ok(_) => {},
+                Err(some) => println!("Couldn't join! {:?}", some) 
+            }
+        }
+        println!("Joined all");
+        assert_eq!(None, queue.dequeue());
     }
 }
