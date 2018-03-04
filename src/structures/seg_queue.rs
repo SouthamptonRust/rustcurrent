@@ -32,16 +32,16 @@ impl<T: Send + Debug> SegQueue<T> {
     pub fn enqueue(&self, data: T) {
         let mut vec: Vec<usize> = (0..self.k).collect();
         let vals = vec.as_mut_slice();
-        let mut data_ptr = Box::into_raw(Box::new(data));
+        let mut data_box = Box::new(data);
         loop {
-            let data_ptr = match self.try_enqueue(data_ptr, vals) {
+            data_box = match self.try_enqueue(data_box, vals) {
                 Ok(()) => { return; },
                 Err(val) => val
             };    
         }
     }
 
-    fn try_enqueue(&self, data: *mut T, vals: &mut[usize]) -> Result<(), *mut T> {
+    fn try_enqueue(&self, data: Box<T>, vals: &mut[usize]) -> Result<(), Box<T>> {
         let tail = self.tail.load(Ordering::Relaxed);
         self.manager.protect(tail, 0);
 
@@ -53,13 +53,18 @@ impl<T: Send + Debug> SegQueue<T> {
         let mut rng = rand::thread_rng();
         rng.shuffle(vals);
         
+        if let Ok(index) = self.find_empty_slot(tail, vals) {
 
+        } else {
+
+        }
 
         Ok(())  
     }
 
-    fn find_empty_slot(&self, node: &Node<T>, order: &[usize]) -> Result<usize, ()> {
+    fn find_empty_slot(&self, node_ptr: *mut Node<T>, order: &[usize]) -> Result<usize, ()> {
         unsafe {
+            let node = &*node_ptr;
             for i in order {
                 match *node.data[*i].load(Ordering::Relaxed) {
                     Some(_) => {},
