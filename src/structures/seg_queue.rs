@@ -12,12 +12,6 @@ pub struct SegQueue<T: Send + Debug> {
     k: usize
 }
 
-#[derive(Debug)]
-struct Node<T: Send + Debug> {
-    data: Vec<AtomicPtr<Option<T>>>,
-    next: AtomicPtr<Node<T>>
-}   
-
 impl<T: Send + Debug> SegQueue<T> {
     pub fn new(k: usize) -> Self {
         let init_node: *mut Node<T> = Box::into_raw(Box::new(Node::new(k)));
@@ -32,7 +26,7 @@ impl<T: Send + Debug> SegQueue<T> {
     pub fn enqueue(&self, data: T) {
         let mut vec: Vec<usize> = (0..self.k).collect();
         let vals = vec.as_mut_slice();
-        let mut data_box = Box::new(data);
+        let mut data_box = Box::new(Some(data));
         loop {
             data_box = match self.try_enqueue(data_box, vals) {
                 Ok(()) => { return; },
@@ -41,7 +35,7 @@ impl<T: Send + Debug> SegQueue<T> {
         }
     }
 
-    fn try_enqueue(&self, data: Box<T>, vals: &mut[usize]) -> Result<(), Box<T>> {
+    fn try_enqueue(&self, data: Box<Option<T>>, vals: &mut[usize]) -> Result<(), Box<Option<T>>> {
         let tail = self.tail.load(Ordering::Relaxed);
         self.manager.protect(tail, 0);
 
@@ -53,29 +47,71 @@ impl<T: Send + Debug> SegQueue<T> {
         let mut rng = rand::thread_rng();
         rng.shuffle(vals);
         
-        if let Ok(index) = self.find_empty_slot(tail, vals) {
-
+        if let Ok((index, old_ptr)) = self.find_empty_slot(tail, vals) {
+            if ptr::eq(tail, self.tail.load(Ordering::Acquire)) {
+                let data_ptr = Box::into_raw(data);
+                unsafe {
+                    match (*tail).data[index].compare_exchange_weak(old_ptr, data_ptr, Ordering::AcqRel, Ordering::Acquire) {
+                        Ok(old) => {
+                            // Use the committed function to check the addition or reverse it
+                            // Free the old data
+                            Box::from_raw(old);
+                            return Ok(())
+                        },
+                        Err(_) => {
+                            return Err(Box::from_raw(data_ptr))
+                        }
+                    }
+                }
+            }
         } else {
-
+            // Advance the tail, either by adding the new block or adjusting the tail
+            self.advance_tail(tail);
         }
 
         Ok(())  
     }
 
-    fn find_empty_slot(&self, node_ptr: *mut Node<T>, order: &[usize]) -> Result<usize, ()> {
+    fn find_empty_slot(&self, node_ptr: *mut Node<T>, order: &[usize]) -> Result<(usize, *mut Option<T>), ()> {
         unsafe {
             let node = &*node_ptr;
             for i in order {
-                match *node.data[*i].load(Ordering::Relaxed) {
+                let old_ptr = node.data[*i].load(Ordering::Relaxed);
+                match *old_ptr {
                     Some(_) => {},
-                    None => {return Ok(*i);}
+                    None => {return Ok((*i, old_ptr));}
                 }
             }
         }
         
         Err(())
     }
+
+    fn advance_tail(&self, old_tail: *mut Node<T>) {
+        if ptr::eq(old_tail, self.tail.load(Ordering::Relaxed)) {
+            unsafe {
+                let next = (*old_tail).next.load(Ordering::Relaxed);
+                if next.is_null() {
+                    // Create a new tail segment and advance if possible
+                    let new_seg_ptr: *mut Node<T> = Box::into_raw(Box::new(Node::new(self.k)));
+                    match (*old_tail).next.compare_exchange_weak(next, new_seg_ptr, Ordering::AcqRel, Ordering::Acquire) {
+                        Ok(_) => { let _ = self.tail.compare_exchange(old_tail, new_seg_ptr, Ordering::AcqRel, Ordering::Acquire); },
+                        Err(_) => { Box::from_raw(new_seg_ptr); } // Delete the unused new segment if we can't swap in
+                    }
+                } else {
+                    // Advance tail, because it is out of sync somehow
+                    let _ = self.tail.compare_exchange(old_tail, next, Ordering::AcqRel, Ordering::Acquire);
+                }
+            }
+        }
+    }
 }
+
+#[derive(Debug)]
+struct Node<T: Send + Debug> {
+    data: Vec<AtomicPtr<Option<T>>>,
+    next: AtomicPtr<Node<T>>
+}   
 
 impl<T: Send + Debug> Node<T> {
     fn new(k: usize) -> Self {
