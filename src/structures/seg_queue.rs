@@ -63,14 +63,18 @@ impl<T: Send + Debug> SegQueue<T> {
                         }
                     }
                 }
+            } else {
+                // The tail has changed so we should not try an insertion
+                return Err(data)
             }
         } else {
             // Advance the tail, either by adding the new block or adjusting the tail
             self.advance_tail(tail);
+            return Err(data)
         }
-
-        Ok(())  
     }
+
+    // TODO: write dequeue
 
     fn find_empty_slot(&self, node_ptr: *mut Node<T>, order: &[usize]) -> Result<(usize, *mut Option<T>), ()> {
         unsafe {
@@ -101,6 +105,33 @@ impl<T: Send + Debug> SegQueue<T> {
                 } else {
                     // Advance tail, because it is out of sync somehow
                     let _ = self.tail.compare_exchange(old_tail, next, Ordering::AcqRel, Ordering::Acquire);
+                }
+            }
+        }
+    }
+
+    fn advance_head(&self, old_head: *mut Node<T>) {
+        let head = self.head.load(Ordering::Relaxed);
+        // Head doesn't need protecting, we ONLY use it if it's equal to old_head, which should be protected already
+        if ptr::eq(head, old_head) {
+            let tail = self.tail.load(Ordering::Relaxed);
+            unsafe {
+                let tail_next = (*tail).next.load(Ordering::Relaxed);
+                let head_next = (*head).next.load(Ordering::Relaxed);
+                if ptr::eq(head, self.head.load(Ordering::Relaxed)) {
+                    if ptr::eq(tail, head) {
+                        if tail_next.is_null() {
+                            // Queue only has one segment, so we don't remove it
+                            return;
+                        } else if ptr::eq(tail, self.tail.load(Ordering::Relaxed)) {
+                            // Set the tail to point to the next block, so the queue has two segments
+                            let _ = self.tail.compare_exchange(tail, tail_next, Ordering::AcqRel, Ordering::Acquire);
+                        }
+                    }
+                    // TODO: Set the head to be deleted, might need for the commit function
+                    // Advance the head and retire old_head
+                    let _ = self.head.compare_exchange(head, head_next, Ordering::AcqRel, Ordering::Acquire);
+                    self.manager.retire(head, 0);
                 }
             }
         }
