@@ -128,6 +128,16 @@ impl<T: Send + Debug> SegQueue<T> {
         }
     }
 
+    /// This function is needed because it is possible to create a scenario where the enqueue tries to
+    /// delete the head, without checking its emptiness again. This means our data could be lost.
+    unsafe fn commit(&self, tail_ptr: *mut Node<T>, item_ptr: *mut Option<T>, index: usize) -> Result<(), ()>{
+        if ptr::eq((*tail_ptr).data[index].load(Ordering::Relaxed), item_ptr) {
+            return Ok(())
+        }
+        
+        Ok(())
+    }
+
     // TODO: write commit check function
 
     fn find_empty_slot(&self, node_ptr: *mut Node<T>, order: &[usize]) -> Result<(usize, *mut Option<T>), ()> {
