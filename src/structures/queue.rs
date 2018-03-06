@@ -157,6 +157,7 @@ mod tests {
     use std::sync::atomic::Ordering;
 
     #[test]
+    #[ignore]
     fn test_queue_single_threaded() {
         let mut queue : Queue<u8> = Queue::new();
         queue.enqueue(8);
@@ -180,6 +181,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_queue_multithreaded() {
         let mut queue: Arc<Queue<u32>> = Arc::new(Queue::new());
         let mut waitvec: Vec<thread::JoinHandle<()>> = Vec::new();

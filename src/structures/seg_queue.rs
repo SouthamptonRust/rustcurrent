@@ -77,19 +77,58 @@ impl<T: Send + Debug> SegQueue<T> {
     }
 
     pub fn dequeue(&self) -> Option<T> {
+        let mut vec: Vec<usize> = (0..self.k).collect();
+        let vals = vec.as_mut_slice();
         loop {
-            if let Ok(val) = self.try_dequeue() {
+            if let Ok(val) = self.try_dequeue(vals) {
                 return val
             }
         }
     }
 
-    pub fn try_dequeue(&self) -> Result<Option<T>, ()> {
+    pub fn try_dequeue(&self, vals: &mut[usize]) -> Result<Option<T>, ()> {
+        let head = self.head.load(Ordering::Relaxed);
+        self.manager.protect(head, 0);
+        if !ptr::eq(head, self.head.load(Ordering::Relaxed)) {
+            return Err(())
+        }
+        
+        let mut rng = rand::thread_rng();
+        rng.shuffle(vals);
 
-        Err(())
+        if let Ok((index, item_ptr)) = self.find_item(head, vals) {
+            let tail = self.tail.load(Ordering::Acquire);
+            // If the two are equal, perform maintenance and advance the tail
+            if ptr::eq(head, tail) {
+                self.advance_tail(tail);
+            }
+            let new_none_ptr: *mut Option<T> = Box::into_raw(Box::new(None));
+            unsafe {
+                match (*head).data[index].compare_exchange_weak(item_ptr, new_none_ptr, Ordering::AcqRel, Ordering::Acquire) {
+                    Ok(_) => {
+                        // We should have sole ownership of the item ptr now
+                        let data = ptr::replace(item_ptr, None);
+                        Box::from_raw(item_ptr);
+                        return Ok(data)
+                    },
+                    Err(_) => {
+                        // Free what we just created, don't need it
+                        Box::from_raw(new_none_ptr);
+                    }
+                }
+            }
+        }
+        // If we can't find a slot, advance the head
+        // If we only have the one segment, the queue must be empty
+        if ptr::eq(head, self.tail.load(Ordering::Acquire)) {
+            return Ok(None)
+        } else {
+            self.advance_head(head);
+            return Err(())
+        }
     }
 
-    // TODO: write dequeue
+    // TODO: write commit check function
 
     fn find_empty_slot(&self, node_ptr: *mut Node<T>, order: &[usize]) -> Result<(usize, *mut Option<T>), ()> {
         unsafe {
@@ -219,16 +258,47 @@ impl<T: Send + Debug> Debug for Node<T> {
 
 mod tests {
     use super::SegQueue;
+    use std::collections::HashSet;
 
     #[test]
     fn test_enqueue() {
         let queue: SegQueue<u8> = SegQueue::new(4);
+
+        let mut poss_set: HashSet<u8> = HashSet::new();
+
         queue.enqueue(3);
+        poss_set.insert(3);
         queue.enqueue(4);
+        poss_set.insert(4);
         queue.enqueue(5);
+        poss_set.insert(5);
         queue.enqueue(6);
+        poss_set.insert(6);
+
         queue.enqueue(7);
 
         println!("{:?}", queue);
+        
+        let res = queue.dequeue().unwrap();
+        assert!(poss_set.contains(&res));
+        poss_set.remove(&res);
+
+        let res = queue.dequeue().unwrap();
+        assert!(poss_set.contains(&res));
+        poss_set.remove(&res);
+
+        let res = queue.dequeue().unwrap();
+        assert!(poss_set.contains(&res));
+        poss_set.remove(&res);
+
+        let res = queue.dequeue().unwrap();
+        assert!(poss_set.contains(&res));
+        poss_set.remove(&res);
+
+        println!("{:?}", queue);
+
+        assert_eq!(Some(7), queue.dequeue());
+        assert_eq!(None, queue.dequeue());
+
     }
 }
