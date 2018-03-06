@@ -60,7 +60,7 @@ impl<T: Send + Debug> Queue<T> {
             match (*tail).next.compare_exchange_weak(ptr::null_mut(), node_ptr, Ordering::AcqRel, Ordering::Acquire) {
                 Ok(_) => {
                     // Success! Set our new node to the tail
-                    let _ = self.tail.compare_exchange_weak(tail, node_ptr, Ordering::AcqRel, Ordering::Acquire);
+                    let _ = self.tail.compare_exchange(tail, node_ptr, Ordering::AcqRel, Ordering::Acquire);
                     return Ok(())
                 },
                 // Failure :( try again
@@ -79,7 +79,7 @@ impl<T: Send + Debug> Queue<T> {
         }
     }
 
-    pub fn try_dequeue(&self) -> Result<Option<T>, ()> {
+    fn try_dequeue(&self) -> Result<Option<T>, ()> {
         let head = self.head.load(Ordering::Acquire);
         self.manager.protect(head, 0);
         if !ptr::eq(head, self.head.load(Ordering::Acquire)) {

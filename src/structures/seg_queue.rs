@@ -1,6 +1,7 @@
 use memory::HPBRManager;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::fmt::Debug;
+use std::fmt;
 use std::ptr;
 use rand;
 use rand::Rng;
@@ -54,6 +55,7 @@ impl<T: Send + Debug> SegQueue<T> {
                     match (*tail).data[index].compare_exchange_weak(old_ptr, data_ptr, Ordering::AcqRel, Ordering::Acquire) {
                         Ok(old) => {
                             // Use the committed function to check the addition or reverse it
+                            // This needs to be done because of a data race with dequeuing advancing the head
                             // Free the old data
                             Box::from_raw(old);
                             return Ok(())
@@ -74,6 +76,19 @@ impl<T: Send + Debug> SegQueue<T> {
         }
     }
 
+    pub fn dequeue(&self) -> Option<T> {
+        loop {
+            if let Ok(val) = self.try_dequeue() {
+                return val
+            }
+        }
+    }
+
+    pub fn try_dequeue(&self) -> Result<Option<T>, ()> {
+
+        Err(())
+    }
+
     // TODO: write dequeue
 
     fn find_empty_slot(&self, node_ptr: *mut Node<T>, order: &[usize]) -> Result<(usize, *mut Option<T>), ()> {
@@ -84,6 +99,21 @@ impl<T: Send + Debug> SegQueue<T> {
                 match *old_ptr {
                     Some(_) => {},
                     None => {return Ok((*i, old_ptr));}
+                }
+            }
+        }
+        
+        Err(())
+    }
+
+    fn find_item(&self, node_ptr: *mut Node<T>, order: &[usize]) -> Result<(usize, *mut Option<T>), ()> {
+        unsafe {
+            let node = &*node_ptr;
+            for i in order {
+                let old_ptr = node.data[*i].load(Ordering::Relaxed);
+                match *old_ptr {
+                    Some(_) => { return Ok((*i, old_ptr))},
+                    None => {}
                 }
             }
         }
@@ -138,7 +168,21 @@ impl<T: Send + Debug> SegQueue<T> {
     }
 }
 
-#[derive(Debug)]
+impl<T: Send + Debug> Debug for SegQueue<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut start_ptr = self.head.load(Ordering::Relaxed);
+        let mut node_string = "[".to_owned();
+        unsafe {
+            while !start_ptr.is_null() {
+                node_string.push_str(&format!("\n\t{:?}", *start_ptr));
+                start_ptr = (*start_ptr).next.load(Ordering::Relaxed);
+            }
+        }
+        node_string += "]";
+        write!(f, "SegQueue{{ {} }}", node_string)
+    }
+}
+
 struct Node<T: Send + Debug> {
     data: Vec<AtomicPtr<Option<T>>>,
     next: AtomicPtr<Node<T>>
@@ -154,5 +198,37 @@ impl<T: Send + Debug> Node<T> {
             data,
             next: AtomicPtr::default()
         }
+    }
+}
+
+impl<T: Send + Debug> Debug for Node<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut vals_string = "[".to_owned();
+        unsafe {
+            for atom_ptr in &self.data {
+                let ptr = atom_ptr.load(Ordering::Relaxed);
+                if !ptr.is_null() {
+                    vals_string.push_str(&format!("({:?}: {:?})", atom_ptr, *ptr));
+                }
+            }
+        }
+        vals_string += "]";
+        write!(f, "Node {{ Values: {}, Next: {:?} }}", &vals_string, self.next)
+    }
+}
+
+mod tests {
+    use super::SegQueue;
+
+    #[test]
+    fn test_enqueue() {
+        let queue: SegQueue<u8> = SegQueue::new(4);
+        queue.enqueue(3);
+        queue.enqueue(4);
+        queue.enqueue(5);
+        queue.enqueue(6);
+        queue.enqueue(7);
+
+        println!("{:?}", queue);
     }
 }
