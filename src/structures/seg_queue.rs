@@ -19,7 +19,7 @@ impl<T: Send + Debug> SegQueue<T> {
         SegQueue {
             head: AtomicPtr::new(init_node),
             tail: AtomicPtr::new(init_node),
-            manager: HPBRManager::new(100, 2),
+            manager: HPBRManager::new(100, 3),
             k
         }
     }
@@ -57,8 +57,13 @@ impl<T: Send + Debug> SegQueue<T> {
                             // Use the committed function to check the addition or reverse it
                             // This needs to be done because of a data race with dequeuing advancing the head
                             // Free the old data
-                            Box::from_raw(old);
-                            return Ok(())
+                            return match self.commit(tail, old, index) {
+                                true => {
+                                    Box::from_raw(old);
+                                    Ok(())
+                                },
+                                false => Err(Box::from_raw(data_ptr)) 
+                            }
                         },
                         Err(_) => {
                             return Err(Box::from_raw(data_ptr))
@@ -130,15 +135,59 @@ impl<T: Send + Debug> SegQueue<T> {
 
     /// This function is needed because it is possible to create a scenario where the enqueue tries to
     /// delete the head, without checking its emptiness again. This means our data could be lost.
-    unsafe fn commit(&self, tail_ptr: *mut Node<T>, item_ptr: *mut Option<T>, index: usize) -> Result<(), ()>{
-        if ptr::eq((*tail_ptr).data[index].load(Ordering::Relaxed), item_ptr) {
-            return Ok(())
+    unsafe fn commit(&self, tail_old: *mut Node<T>, item_ptr: *mut Option<T>, index: usize) -> bool {
+        if ptr::eq((*tail_old).data[index].load(Ordering::Relaxed), item_ptr) {
+            return true
         }
-        
-        Ok(())
+
+        let head = self.head.load(Ordering::Relaxed);
+        let tail = self.tail.load(Ordering::Relaxed);
+        let new_none_ptr: *mut Option<T> = Box::into_raw(Box::new(None));
+
+        if self.in_queue_after_head(tail_old) {
+            return true
+        }
+        if self.not_in_queue(tail_old) {
+            return match (*tail_old).data[index].compare_exchange(item_ptr, new_none_ptr, Ordering::AcqRel, Ordering::Acquire) {
+                Err(_) => true,
+                Ok(_) => {
+                    Box::from_raw(new_none_ptr);
+                    false
+                }
+            }
+        }
+
+        // Element must be in head
+        return match (*tail_old).data[index].compare_exchange(item_ptr, new_none_ptr, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => {
+                Box::from_raw(new_none_ptr);
+                false
+            },
+            Err(_) => true
+        }
     }
 
-    // TODO: write commit check function
+    unsafe fn in_queue_after_head(&self, tail_old: *mut Node<T>) -> bool {
+        let mut head = self.head.load(Ordering::Relaxed);
+        self.manager.protect(head, 1);
+        if !ptr::eq(head, self.head.load(Ordering::Relaxed)) {
+            return false
+        }
+
+        while !head.is_null() {
+            let next = (*head).next.load(Ordering::Acquire);
+            if ptr::eq(next, tail_old) {
+                return true
+            }
+            head = next;
+        }
+
+        false
+    }
+
+    unsafe fn not_in_queue(&self, tail_old: *mut Node<T>) -> bool {
+        return (*tail_old).deleted
+    }
 
     fn find_empty_slot(&self, node_ptr: *mut Node<T>, order: &[usize]) -> Result<(usize, *mut Option<T>), ()> {
         unsafe {
@@ -210,6 +259,7 @@ impl<T: Send + Debug> SegQueue<T> {
                     // TODO: Set the head to be deleted, might need for the commit function
                     // Advance the head and retire old_head
                     let _ = self.head.compare_exchange(head, head_next, Ordering::AcqRel, Ordering::Acquire);
+                    (*head).deleted = true;
                     self.manager.retire(head, 0);
                 }
             }
@@ -234,7 +284,8 @@ impl<T: Send + Debug> Debug for SegQueue<T> {
 
 struct Node<T: Send + Debug> {
     data: Vec<AtomicPtr<Option<T>>>,
-    next: AtomicPtr<Node<T>>
+    next: AtomicPtr<Node<T>>,
+    deleted: bool
 }   
 
 impl<T: Send + Debug> Node<T> {
@@ -245,7 +296,8 @@ impl<T: Send + Debug> Node<T> {
         }
         Node {
             data,
-            next: AtomicPtr::default()
+            next: AtomicPtr::default(),
+            deleted: false
         }
     }
 }
