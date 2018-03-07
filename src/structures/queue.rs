@@ -116,6 +116,19 @@ impl<T: Send + Debug> Queue<T> {
     }
 }
 
+impl<T: Send + Debug> Drop for Queue<T> {
+    fn drop(&mut self) {
+        let mut current = self.head.load(Ordering::Relaxed);
+        while !current.is_null() {
+            unsafe {
+                let next = (*current).next.load(Ordering::Relaxed);
+                Box::from_raw(current);
+                current = next;
+            }
+        }
+    }
+}
+
 impl<T: Send + Debug> Node<T> {
     fn new(value: T) -> Self {
         Node {

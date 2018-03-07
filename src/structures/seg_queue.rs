@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 use std::fmt::Debug;
 use std::fmt;
 use std::ptr;
+use std::mem;
 use rand;
 use rand::Rng;
 
@@ -37,7 +38,7 @@ impl<T: Send + Debug> SegQueue<T> {
     }
 
     fn try_enqueue(&self, data: Box<Option<T>>, vals: &mut[usize]) -> Result<(), Box<Option<T>>> {
-        let tail = self.tail.load(Ordering::Relaxed);
+        let tail = self.tail.load(Ordering::Acquire);
         self.manager.protect(tail, 0);
 
         if !ptr::eq(tail, self.tail.load(Ordering::Acquire)) {
@@ -139,7 +140,7 @@ impl<T: Send + Debug> SegQueue<T> {
     }
 
     pub fn try_dequeue(&self, vals: &mut[usize]) -> Result<Option<T>, ()> {
-        let head = self.head.load(Ordering::Relaxed);
+        let head = self.head.load(Ordering::Acquire);
         self.manager.protect(head, 0);
         if !ptr::eq(head, self.head.load(Ordering::Acquire)) {
             return Err(())
@@ -187,7 +188,7 @@ impl<T: Send + Debug> SegQueue<T> {
         unsafe {
             let node = &*node_ptr;
             for i in order {
-                let old_ptr = node.data[*i].load(Ordering::Relaxed);
+                let old_ptr = node.data[*i].load(Ordering::Acquire);
                 match *old_ptr {
                     Some(_) => {},
                     None => {return Ok((*i, old_ptr));}
@@ -202,7 +203,7 @@ impl<T: Send + Debug> SegQueue<T> {
         unsafe {
             let node = &*node_ptr;
             for i in order {
-                let old_ptr = node.data[*i].load(Ordering::Relaxed);
+                let old_ptr = node.data[*i].load(Ordering::Acquire);
                 match *old_ptr {
                     Some(_) => { return Ok((*i, old_ptr))},
                     None => {}
@@ -217,8 +218,8 @@ impl<T: Send + Debug> SegQueue<T> {
         let tail_current = self.tail.load(Ordering::Acquire);
         if ptr::eq(tail_current, old_tail) {
             unsafe {
-                let next = (*old_tail).next.load(Ordering::Relaxed);
-                if ptr::eq(old_tail, self.tail.load(Ordering::Relaxed)) {
+                let next = (*old_tail).next.load(Ordering::Acquire);
+                if ptr::eq(old_tail, self.tail.load(Ordering::Acquire)) {
                     if next.is_null() {
                         // Create a new tail segment and advance if possible
                         let new_seg_ptr: *mut Node<T> = Box::into_raw(Box::new(Node::new(self.k)));
@@ -236,20 +237,20 @@ impl<T: Send + Debug> SegQueue<T> {
     }
 
     fn advance_head(&self, old_head: *mut Node<T>) {
-        let head = self.head.load(Ordering::Relaxed);
+        let head = self.head.load(Ordering::Acquire);
         // Head doesn't need protecting, we ONLY use it if it's equal to old_head, which should be protected already
         if ptr::eq(head, old_head) {
-            let tail = self.tail.load(Ordering::Relaxed);
+            let tail = self.tail.load(Ordering::Acquire);
             unsafe {
-                let tail_next = (*tail).next.load(Ordering::Relaxed);
-                let head_next = (*head).next.load(Ordering::Relaxed);
-                if ptr::eq(head, self.head.load(Ordering::Relaxed)) {
+                let tail_next = (*tail).next.load(Ordering::Acquire);
+                let head_next = (*head).next.load(Ordering::Acquire);
+                if ptr::eq(head, self.head.load(Ordering::Acquire)) {
                     if ptr::eq(tail, head) {
                         if tail_next.is_null() {
                             // Queue only has one segment, so we don't remove it
                             return;
                         } 
-                        if ptr::eq(tail, self.tail.load(Ordering::Relaxed)) {
+                        if ptr::eq(tail, self.tail.load(Ordering::Acquire)) {
                             // Set the tail to point to the next block, so the queue has two segments
                             let _ = self.tail.compare_exchange(tail, tail_next, Ordering::AcqRel, Ordering::Acquire);
                         }
@@ -264,6 +265,19 @@ impl<T: Send + Debug> SegQueue<T> {
                         Err(_) => {}
                     }
                 }
+            }
+        }
+    }
+}
+
+impl<T: Send + Debug> Drop for SegQueue<T> {
+    fn drop(&mut self) {
+        let mut current = self.head.load(Ordering::Relaxed);
+        while !current.is_null() {
+            unsafe {
+                let next = (*current).next.load(Ordering::Relaxed);
+                Box::from_raw(current);
+                current = next;
             }
         }
     }
@@ -317,6 +331,18 @@ impl<T: Send + Debug> Debug for Node<T> {
         }
         vals_string += "]";
         write!(f, "Node {{ Values: {}, Next: {:?} }}", &vals_string, self.next)
+    }
+}
+
+impl<T: Send + Debug> Drop for Node<T> {
+    fn drop(&mut self) {
+        let vec = mem::replace(&mut self.data, Vec::new());
+        for a_ptr in vec {
+            let ptr = a_ptr.load(Ordering::Relaxed);
+            unsafe {
+                Box::from_raw(ptr);
+            }
+        }
     }
 }
 
@@ -393,7 +419,8 @@ mod tests {
                             None => {
                                 num += 1;
                                 if num > 1000 {
-                                    println!("{:?}", queue_copy);
+                                    //println!("{:?}", queue_copy);
+                                    println!("{}", num);
                                     num = 0;
                                 }
                             } 
