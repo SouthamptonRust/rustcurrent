@@ -57,7 +57,7 @@ impl<T: Send + Debug> SegQueue<T> {
                             // Use the committed function to check the addition or reverse it
                             // This needs to be done because of a data race with dequeuing advancing the head
                             // Free the old data
-                            return match self.commit(tail, old, index) {
+                            return match self.commit(tail, data_ptr, index) {
                                 true => {
                                     Box::from_raw(old);
                                     Ok(())
@@ -81,6 +81,53 @@ impl<T: Send + Debug> SegQueue<T> {
         }
     }
 
+    unsafe fn commit(&self, tail_old: *mut Node<T>, item_ptr: *mut Option<T>, index: usize) -> bool {
+        if !ptr::eq((*tail_old).data[index].load(Ordering::Acquire), item_ptr) {
+            // Already dequeued
+            return true;
+        }
+        let head = self.head.load(Ordering::Acquire);
+        let new_none_ptr: *mut Option<T> = Box::into_raw(Box::new(None));
+
+        if (*tail_old).deleted {
+            return match (*tail_old).data[index].compare_exchange(item_ptr, new_none_ptr, Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) => false,
+                Err(_) => {
+                    Box::from_raw(new_none_ptr);
+                    true
+                } 
+            }
+        } else if ptr::eq(head, tail_old) {
+            return match self.head.compare_exchange(head, head, Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) => {
+                    Box::from_raw(new_none_ptr);
+                    true
+                },
+                Err(_) => {
+                    return match (*tail_old).data[index].compare_exchange(item_ptr, new_none_ptr, Ordering::AcqRel, Ordering::Acquire) {
+                        Ok(_) => {
+                            false
+                        },
+                        Err(_) => {
+                            Box::from_raw(new_none_ptr);
+                            true
+                        }
+                    }  
+                }
+            }
+        } else if !(*tail_old).deleted {
+            return true
+        } else {
+            return match (*tail_old).data[index].compare_exchange(item_ptr, new_none_ptr, Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) => false,
+                Err(_) => {
+                    Box::from_raw(new_none_ptr);
+                    true
+                }
+            }
+        }
+    }
+
     pub fn dequeue(&self) -> Option<T> {
         let mut vec: Vec<usize> = (0..self.k).collect();
         let vals = vec.as_mut_slice();
@@ -94,99 +141,44 @@ impl<T: Send + Debug> SegQueue<T> {
     pub fn try_dequeue(&self, vals: &mut[usize]) -> Result<Option<T>, ()> {
         let head = self.head.load(Ordering::Relaxed);
         self.manager.protect(head, 0);
-        if !ptr::eq(head, self.head.load(Ordering::Relaxed)) {
+        if !ptr::eq(head, self.head.load(Ordering::Acquire)) {
             return Err(())
         }
         
         let mut rng = rand::thread_rng();
         rng.shuffle(vals);
+        let found = self.find_item(head, vals);
+        let tail = self.tail.load(Ordering::Acquire);
 
-        if let Ok((index, item_ptr)) = self.find_item(head, vals) {
-            let tail = self.tail.load(Ordering::Acquire);
-            // If the two are equal, perform maintenance and advance the tail
-            if ptr::eq(head, tail) {
-                self.advance_tail(tail);
-            }
-            let new_none_ptr: *mut Option<T> = Box::into_raw(Box::new(None));
-            unsafe {
-                match (*head).data[index].compare_exchange_weak(item_ptr, new_none_ptr, Ordering::AcqRel, Ordering::Acquire) {
-                    Ok(_) => {
-                        // We should have sole ownership of the item ptr now
-                        let data = ptr::replace(item_ptr, None);
-                        Box::from_raw(item_ptr);
-                        return Ok(data)
-                    },
-                    Err(_) => {
-                        // Free what we just created, don't need it
-                        Box::from_raw(new_none_ptr);
+        if ptr::eq(head, self.head.load(Ordering::Acquire)) {
+            match found {
+                Ok((index, item_ptr)) => {
+                    if ptr::eq(head, tail) {
+                        self.advance_tail(tail);
+                    };
+                    let new_none_ptr: *mut Option<T> = Box::into_raw(Box::new(None));
+                    return match (*head).data[index].compare_exchange(item_ptr, new_none_ptr, Ordering::AcqRel, Ordering::Acquire) {
+                        Ok(_) => {
+                            let data = ptr::replace(item_ptr, None);
+                            Box::from_raw(item_ptr);
+                            Ok(data)
+                        },
+                        Err(_) => {
+                            Box::from_raw(new_none_ptr);
+                            Err(())
+                        }
                     }
+                },
+                Err(()) => {
+                    if ptr::eq(head, tail) && ptr::eq(tail, self.tail.load(Ordering::Acquire)) {
+                        return Ok(None)
+                    }
+                    self.advance_head(head);
+                    return Err(())
                 }
             }
         }
-        // If we can't find a slot, advance the head
-        // If we only have the one segment, the queue must be empty
-        if ptr::eq(head, self.tail.load(Ordering::Acquire)) {
-            return Ok(None)
-        } else {
-            self.advance_head(head);
-            return Err(())
-        }
-    }
-
-    /// This function is needed because it is possible to create a scenario where the enqueue tries to
-    /// delete the head, without checking its emptiness again. This means our data could be lost.
-    unsafe fn commit(&self, tail_old: *mut Node<T>, item_ptr: *mut Option<T>, index: usize) -> bool {
-        if ptr::eq((*tail_old).data[index].load(Ordering::Relaxed), item_ptr) {
-            return true
-        }
-
-        let head = self.head.load(Ordering::Relaxed);
-        let tail = self.tail.load(Ordering::Relaxed);
-        let new_none_ptr: *mut Option<T> = Box::into_raw(Box::new(None));
-
-        if self.in_queue_after_head(tail_old) {
-            return true
-        }
-        if self.not_in_queue(tail_old) {
-            return match (*tail_old).data[index].compare_exchange(item_ptr, new_none_ptr, Ordering::AcqRel, Ordering::Acquire) {
-                Err(_) => true,
-                Ok(_) => {
-                    Box::from_raw(new_none_ptr);
-                    false
-                }
-            }
-        }
-
-        // Element must be in head
-        return match (*tail_old).data[index].compare_exchange(item_ptr, new_none_ptr, Ordering::AcqRel, Ordering::Acquire) {
-            Ok(_) => {
-                Box::from_raw(new_none_ptr);
-                false
-            },
-            Err(_) => true
-        }
-    }
-
-    unsafe fn in_queue_after_head(&self, tail_old: *mut Node<T>) -> bool {
-        let mut head = self.head.load(Ordering::Relaxed);
-        self.manager.protect(head, 1);
-        if !ptr::eq(head, self.head.load(Ordering::Relaxed)) {
-            return false
-        }
-
-        while !head.is_null() {
-            let next = (*head).next.load(Ordering::Acquire);
-            if ptr::eq(next, tail_old) {
-                return true
-            }
-            head = next;
-        }
-
-        false
-    }
-
-    unsafe fn not_in_queue(&self, tail_old: *mut Node<T>) -> bool {
-        return (*tail_old).deleted
+        Err(())
     }
 
     fn find_empty_slot(&self, node_ptr: *mut Node<T>, order: &[usize]) -> Result<(usize, *mut Option<T>), ()> {
@@ -220,19 +212,22 @@ impl<T: Send + Debug> SegQueue<T> {
     }
 
     fn advance_tail(&self, old_tail: *mut Node<T>) {
-        if ptr::eq(old_tail, self.tail.load(Ordering::Relaxed)) {
+        let tail_current = self.tail.load(Ordering::Acquire);
+        if ptr::eq(tail_current, old_tail) {
             unsafe {
                 let next = (*old_tail).next.load(Ordering::Relaxed);
-                if next.is_null() {
-                    // Create a new tail segment and advance if possible
-                    let new_seg_ptr: *mut Node<T> = Box::into_raw(Box::new(Node::new(self.k)));
-                    match (*old_tail).next.compare_exchange_weak(next, new_seg_ptr, Ordering::AcqRel, Ordering::Acquire) {
-                        Ok(_) => { let _ = self.tail.compare_exchange(old_tail, new_seg_ptr, Ordering::AcqRel, Ordering::Acquire); },
-                        Err(_) => { Box::from_raw(new_seg_ptr); } // Delete the unused new segment if we can't swap in
+                if ptr::eq(old_tail, self.tail.load(Ordering::Relaxed)) {
+                    if next.is_null() {
+                        // Create a new tail segment and advance if possible
+                        let new_seg_ptr: *mut Node<T> = Box::into_raw(Box::new(Node::new(self.k)));
+                        match (*old_tail).next.compare_exchange(next, new_seg_ptr, Ordering::AcqRel, Ordering::Acquire) {
+                            Ok(_) => { let _ = self.tail.compare_exchange(old_tail, new_seg_ptr, Ordering::AcqRel, Ordering::Acquire); },
+                            Err(_) => { Box::from_raw(new_seg_ptr); } // Delete the unused new segment if we can't swap in
+                        }
+                    } else {
+                        // Advance tail, because it is out of sync somehow
+                        let _ = self.tail.compare_exchange(old_tail, next, Ordering::AcqRel, Ordering::Acquire);
                     }
-                } else {
-                    // Advance tail, because it is out of sync somehow
-                    let _ = self.tail.compare_exchange(old_tail, next, Ordering::AcqRel, Ordering::Acquire);
                 }
             }
         }
@@ -251,16 +246,21 @@ impl<T: Send + Debug> SegQueue<T> {
                         if tail_next.is_null() {
                             // Queue only has one segment, so we don't remove it
                             return;
-                        } else if ptr::eq(tail, self.tail.load(Ordering::Relaxed)) {
+                        } 
+                        if ptr::eq(tail, self.tail.load(Ordering::Relaxed)) {
                             // Set the tail to point to the next block, so the queue has two segments
                             let _ = self.tail.compare_exchange(tail, tail_next, Ordering::AcqRel, Ordering::Acquire);
                         }
                     }
                     // TODO: Set the head to be deleted, might need for the commit function
                     // Advance the head and retire old_head
-                    let _ = self.head.compare_exchange(head, head_next, Ordering::AcqRel, Ordering::Acquire);
-                    (*head).deleted = true;
-                    self.manager.retire(head, 0);
+                    match self.head.compare_exchange(head, head_next, Ordering::AcqRel, Ordering::Acquire) {
+                        Ok(_) => {
+                            (*head).deleted = true;
+                            self.manager.retire(head, 0);
+                        },
+                        Err(_) => {}
+                    }
                 }
             }
         }
@@ -321,6 +321,8 @@ impl<T: Send + Debug> Debug for Node<T> {
 mod tests {
     use super::SegQueue;
     use std::collections::HashSet;
+    use std::sync::Arc;
+    use std::thread;
 
     #[test]
     fn test_enqueue() {
@@ -362,5 +364,51 @@ mod tests {
         assert_eq!(Some(7), queue.dequeue());
         assert_eq!(None, queue.dequeue());
 
+        println!("{:?}", queue);
+    }
+
+    #[test]
+    fn test_with_contention() {
+        let mut queue: Arc<SegQueue<u16>> = Arc::new(SegQueue::new(20));
+        
+        let mut waitvec: Vec<thread::JoinHandle<()>> = Vec::new();
+
+        for thread_no in 0..20 {
+            let mut queue_copy = queue.clone();
+            waitvec.push(thread::spawn(move || {
+                for i in 0..10000 {
+                    queue_copy.enqueue(i);
+                }
+                //println!("Push thread {} complete", i);
+            }));
+            queue_copy = queue.clone();
+            waitvec.push(thread::spawn(move || {
+                for i in 0..10000 {
+                    let mut num = 0;
+                    loop {
+                        match queue_copy.dequeue() {
+                            Some(_) => {num = 0; break},
+                            None => {
+                                num += 1;
+                                if num > 1000 {
+                                    println!("{:?}", queue_copy);
+                                    num = 0;
+                                }
+                            } 
+                        }
+                    }
+                }
+                println!("Pop thread {} complete", thread_no);
+            }));
+        }
+
+        for handle in waitvec {
+            match handle.join() {
+                Ok(_) => {},
+                Err(some) => println!("Couldn't join! {:?}", some) 
+            }
+        }
+        println!("Joined all");
+        assert_eq!(None, queue.dequeue());
     }
 }
