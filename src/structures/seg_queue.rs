@@ -157,15 +157,17 @@ impl<T: Send + Debug> SegQueue<T> {
                         self.advance_tail(tail);
                     };
                     let new_none_ptr: *mut Option<T> = Box::into_raw(Box::new(None));
-                    return match (*head).data[index].compare_exchange(item_ptr, new_none_ptr, Ordering::AcqRel, Ordering::Acquire) {
-                        Ok(_) => {
-                            let data = ptr::replace(item_ptr, None);
-                            Box::from_raw(item_ptr);
-                            Ok(data)
-                        },
-                        Err(_) => {
-                            Box::from_raw(new_none_ptr);
-                            Err(())
+                    unsafe {
+                        return match (*head).data[index].compare_exchange(item_ptr, new_none_ptr, Ordering::AcqRel, Ordering::Acquire) {
+                            Ok(_) => {
+                                let data = ptr::replace(item_ptr, None);
+                                Box::from_raw(item_ptr);
+                                Ok(data)
+                            },
+                            Err(_) => {
+                                Box::from_raw(new_none_ptr);
+                                Err(())
+                            }
                         }
                     }
                 },
