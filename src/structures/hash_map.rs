@@ -4,18 +4,24 @@ use std::fmt::Debug;
 use std::ptr;
 use std::marker::PhantomData;
 use std::collections::hash_map::RandomState;
+use memory::HPBRManager;
 
 const HEAD_SIZE: usize = 64;
 const KEY_SIZE: usize = 64;
+const MAX_FAILURES: u64 = 10;
 
-pub struct HashMap<K, V> {
+pub struct HashMap<K, V> 
+where K: Send + Debug,
+      V: Send + Debug
+{
     head: Vec<AtomicMarkablePtr<K, V>>,
     hasher: RandomState,
     head_size: usize,
-    shift_step: usize
+    shift_step: usize,
+    manager: HPBRManager<Node<K, V>>
 }
 
-impl<K: Eq + Hash + Debug, V: Send + Debug> HashMap<K, V> {
+impl<K: Eq + Hash + Debug + Send, V: Send + Debug> HashMap<K, V> {
     /// Create a new Wait-Free HashMap with the default head size
     fn new() -> Self {
         let mut head: Vec<AtomicMarkablePtr<K, V>> = Vec::with_capacity(HEAD_SIZE);
@@ -27,7 +33,8 @@ impl<K: Eq + Hash + Debug, V: Send + Debug> HashMap<K, V> {
             head,
             hasher: RandomState::new(),
             head_size: HEAD_SIZE,
-            shift_step: f64::floor((HEAD_SIZE as f64).log2()) as usize
+            shift_step: f64::floor((HEAD_SIZE as f64).log2()) as usize,
+            manager: HPBRManager::new(100, 1)
         }   
     }
 
@@ -40,15 +47,34 @@ impl<K: Eq + Hash + Debug, V: Send + Debug> HashMap<K, V> {
     /// Attempt to insert into the HashMap
     /// Returns Ok on success and Error on failure containing the attempted
     /// insert data
-    fn insert(&self, key: K, value: V) -> Result<(), (K, V)> {
+    fn insert(&self, key: K, mut value: V) -> Result<(), (K, V)> {
         let mut hash = self.hash(&key);
         let mut bucket = &self.head;
         let mut r = 0usize;
         while r < (KEY_SIZE - self.shift_step) {
-            let position = hash as usize & (self.shift_step - 1);
+            // Get the position as defined by the lowest n bits of the key
+            let position = hash as usize & (bucket.len() - 1);
             hash >>= self.shift_step;
+            let node = bucket[position].get_node();
+            let mut failCount = 0;
+            loop {
+                if failCount > MAX_FAILURES {
+                    // Mark the node for expansion if there is too much contention
+                    bucket[position].mark();
+                }
+                match node {
+                    None => {
+                        // No data currently in this position! Try inserting
+                        value = match bucket[position].try_insertion(hash, value) {
+                            Ok(()) => { return Ok(()) },
+                            Err(val) => val
+                        }
+                    },
+                    Some(node_ptr) => {
 
-            let mut node = &bucket[position];
+                    }
+                }
+            }
 
             r += self.shift_step;
         }
@@ -58,6 +84,7 @@ impl<K: Eq + Hash + Debug, V: Send + Debug> HashMap<K, V> {
 
 }
 
+#[derive(Debug)]
 struct AtomicMarkablePtr<K, V> {
     ptr: Option<AtomicUsize>,
     marker: PhantomData<Node<K, V>>
@@ -140,6 +167,14 @@ where K: Eq + Hash + Debug,
             }
         }
     }
+
+    fn try_insertion(&self, hash: u64, value: V) -> Result<(), V> {
+        let data_node: DataNode<K, V> = DataNode::new(hash, value);
+        let data_node_ptr = Box::into_raw(Box::new(data_node));
+        let usize_ptr = data_node_ptr as usize;
+
+        Ok(())
+    }
 }
 
 impl<K, V> Default for AtomicMarkablePtr<K, V>
@@ -154,6 +189,7 @@ where K: Eq + Hash + Debug,
     }
 } 
 
+#[derive(Debug)]
 struct DataNode<K, V> {
     key: u64,
     value: V,
@@ -173,6 +209,7 @@ where K: Eq + Hash + Debug,
     }
 }
 
+#[derive(Debug)]
 struct ArrayNode<K, V> {
     array: Vec<AtomicMarkablePtr<K, V>>,
     size: usize
@@ -194,6 +231,7 @@ where K: Eq + Hash + Debug,
     }
 }
 
+#[derive(Debug)]
 enum Node<K, V> {
     Data(DataNode<K, V>),
     Array(ArrayNode<K, V>)
