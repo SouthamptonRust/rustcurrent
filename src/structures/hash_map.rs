@@ -1,22 +1,61 @@
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
-use std::hash::Hash;
+use std::hash::{Hash, Hasher, BuildHasher};
 use std::fmt::Debug;
 use std::ptr;
 use std::marker::PhantomData;
+use std::collections::hash_map::RandomState;
 
 const HEAD_SIZE: usize = 64;
+const KEY_SIZE: usize = 64;
 
 pub struct HashMap<K, V> {
     head: Vec<AtomicMarkablePtr<K, V>>,
+    hasher: RandomState,
     head_size: usize,
-    marker: PhantomData<(K, V)>
+    shift_step: usize
 }
 
 impl<K: Eq + Hash + Debug, V: Send + Debug> HashMap<K, V> {
-    fn new() {
+    /// Create a new Wait-Free HashMap with the default head size
+    fn new() -> Self {
         let mut head: Vec<AtomicMarkablePtr<K, V>> = Vec::with_capacity(HEAD_SIZE);
-        
+        for _ in 0..HEAD_SIZE {
+            head.push(AtomicMarkablePtr::default());
+        }
+
+        Self {
+            head,
+            hasher: RandomState::new(),
+            head_size: HEAD_SIZE,
+            shift_step: f64::floor((HEAD_SIZE as f64).log2()) as usize
+        }   
     }
+
+    fn hash(&self, key: &K) -> u64 {
+        let mut hasher = self.hasher.build_hasher();
+        key.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// Attempt to insert into the HashMap
+    /// Returns Ok on success and Error on failure containing the attempted
+    /// insert data
+    fn insert(&self, key: K, value: V) -> Result<(), (K, V)> {
+        let mut hash = self.hash(&key);
+        let mut bucket = &self.head;
+        let mut r = 0usize;
+        while r < (KEY_SIZE - self.shift_step) {
+            let position = hash as usize & (self.shift_step - 1);
+            hash >>= self.shift_step;
+
+            let mut node = &bucket[position];
+
+            r += self.shift_step;
+        }
+
+        Ok(())
+    }
+
 }
 
 struct AtomicMarkablePtr<K, V> {
