@@ -106,7 +106,7 @@ impl<K, V> DataNode<K, V>
 where K: Eq + Hash + Debug,
       V: Send + Debug 
 {
-    fn new(key: u64, value: V) -> Self {
+    pub fn new(key: u64, value: V) -> Self {
         Self {
             key,
             value: Some(value),

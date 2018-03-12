@@ -101,26 +101,114 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug> HashMap<K, V> {
                 }
                 match node {
                     None => {
-                        value = match self.try_insert(hash, value) {
+                        value = match self.try_insert(&bucket[pos], ptr::null_mut(), hash, value) {
                             Ok(_) => { return Ok(()) },
                             Err(old) => old
                         };
                     },
-                    Some(node_ptr) => {}                
+                    Some(node_ptr) => {
+                        if atomic_markable::is_marked(node_ptr) {
+                            node = Some(self.expand_map(bucket, pos, r));
+                        }
+                        if atomic_markable::is_array_node(node_ptr) {
+                            unsafe {
+                                // This dereference should be safe because array nodes cannot be removed
+                                match &*node_ptr {
+                                    &Node::Data(_) => panic!("Unexpected data node"),
+                                    &Node::Array(ref array_node) => {
+                                        bucket = &array_node.array;
+                                        break;
+                                    }
+                                }
+                            }
+                        } else {
+                            self.manager.protect(node_ptr, 0);
+                            let node2 = bucket[pos].get_ptr();
+                            if node2.is_none() || !ptr::eq(node2.unwrap(), node_ptr) {
+                                node = node2;
+                                fail_count += 1;
+                                continue;
+                            } else {
+                                unsafe {
+                                    match &*node_ptr {
+                                        &Node::Array(_) => panic!("Unexpected array node!"),
+                                        &Node::Data(ref data_node) => {
+                                            if data_node.key == hash {
+                                                return Err((key, value))
+                                            }
+                                            // If we get here, we have failed, but have a different key
+                                            // We should thus expand because of contention
+                                            node = Some(self.expand_map(bucket, pos, r));
+                                            if atomic_markable::is_array_node(node.unwrap()) {
+                                                match &*node.unwrap() {
+                                                    &Node::Array(ref array_node) => {
+                                                        bucket = &array_node.array;
+                                                        break;
+                                                    },
+                                                    &Node::Data(_) => panic!("Unexpected data node!")
+                                                }
+                                            } else {
+                                                fail_count += 1;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }   
+                    }                
                 }
             }
 
             r += self.shift_step;
         }
-        Ok(())
+        let pos = hash as usize & (self.head_size - 1);
+        let node = bucket[pos].get_ptr();
+        return match node {
+            None => {
+                match self.try_insert(&bucket[pos], ptr::null_mut(), hash, value) {
+                    Err(val) => Err((key, val)),
+                    Ok(_) => Ok(())
+                }
+            },
+            Some(_) => {
+                Err((key, value))
+            }
+        }
     }
 
-    fn try_insert(&self, key: u64, value: V) -> Result<(), V> {
-        
-        
-        Ok(())
+    fn try_insert(&self, position: &AtomicMarkablePtr<K, V>, old: *mut Node<K, V>, key: u64, value: V) -> Result<(), V> {
+        let data_node: DataNode<K, V> = DataNode::new(key, value);
+        let data_node_ptr = Box::into_raw(Box::new(Node::Data(data_node)));
+
+        return match position.compare_exchange_weak(old, data_node_ptr) {
+            Ok(_) => Ok(()),
+            Err(_) => {
+                unsafe {
+                    let node = ptr::replace(data_node_ptr, Node::Data(DataNode::default()));
+                    if let Node::Data(data_node) = node {
+                        let data = data_node.value.unwrap();
+                        Box::from_raw(data_node_ptr);
+                        Err(data)
+                    } else {
+                        panic!("Unexpected array node!");
+                    }
+                }
+            }
+        }
     }
 }
 
+mod tests {
+    use super::HashMap;
+    use std::sync::Arc;
+    use std::thread;
 
+    #[test]
+    fn test_single_thread_insert() {
+        let map : HashMap<u8, u8> = HashMap::new();
+
+        assert!(map.insert(9, 9).is_ok());
+        assert!(map.insert(9, 7).is_err());
+    }
+}
 
