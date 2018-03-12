@@ -5,6 +5,7 @@ use std::ptr;
 use std::marker::PhantomData;
 
 pub struct HashMap<K, V> {
+    head: Vec<AtomicMarkablePtr<K, V>>,
     marker: PhantomData<(K, V)>
 }
 
@@ -12,32 +13,22 @@ impl<K: Eq + Hash + Debug, V: Send + Debug> HashMap<K, V> {
 
 }
 
-struct WaitFreePtr<N> {
-    ptr: AtomicUsize,
-    marker: PhantomData<N>
-}
-
-impl<N> WaitFreePtr<N> {
-    fn new(ptr: usize) -> Self {
-        WaitFreePtr {
-            ptr: AtomicUsize::new(ptr),
-            marker: PhantomData
-        }
-    }
-
-    fn as_ptr(&self) -> *mut N {
-        self.ptr.load(Ordering::Acquire) as *mut N
-    }
-
-    fn is_marked(&self) -> bool {
-        let result = self.ptr.load(Ordering::SeqCst) & 0x1;
-        println!("{:?}", result);
-        false
-    }
+struct AtomicMarkablePtr<K, V> {
+    
+    marker: PhantomData<(K, V)>
 }
 
 struct DataNode<K, V> {
-    hash: u64,
+    key: u64,
     value: V,
     marker: PhantomData<K>
+}
+
+struct ArrayNode<K, V> {
+    array: Vec<AtomicMarkablePtr<K, V>>
+}
+
+enum Node<K, V> {
+    Data(DataNode<K, V>),
+    Array(ArrayNode<K, V>)
 }
