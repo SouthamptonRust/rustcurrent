@@ -1,11 +1,12 @@
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::hash::{Hash, Hasher, BuildHasher};
 use std::fmt::Debug;
+use std::fmt;
 use std::ptr;
-use std::marker::PhantomData;
 use std::collections::hash_map::RandomState;
 use memory::HPBRManager;
 use super::atomic_markable::{AtomicMarkablePtr, Node, DataNode, ArrayNode};
+use super::atomic_markable;
 
 const HEAD_SIZE: usize = 64;
 const KEY_SIZE: usize = 64;
@@ -45,72 +46,81 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug> HashMap<K, V> {
         hasher.finish()
     }
 
+    /// Attempt to add an array node level to the current position
+    fn expand_map(&self, bucket: &Vec<AtomicMarkablePtr<K, V>>, pos: usize, shift_amount: usize) -> *mut Node<K, V> {
+        // We know this node must exist
+        let node = bucket[pos].get_ptr().unwrap();
+        self.manager.protect(node, 0);
+        if atomic_markable::is_array_node(node) {
+            return node
+        }
+        let node2 = bucket[pos].get_ptr().unwrap();
+        if !ptr::eq(node, node2) {
+            return node2
+        }
+
+        let array_node: ArrayNode<K, V> = ArrayNode::new(self.head_size);
+        unsafe {
+            let hash = match &*node {
+                &Node::Data(ref data_node) => data_node.key,
+                &Node::Array(_) => {panic!("Unexpected array node!")}
+            };
+            let new_pos = (hash >> (shift_amount + self.shift_step)) as usize & (self.head_size - 1);
+            array_node.array[new_pos].ptr().store(node as usize, Ordering::Release);
+
+            let array_node_ptr = Box::into_raw(Box::new(Node::Array(array_node)));
+            return match bucket[pos].compare_exchange_weak(node, array_node_ptr) {
+                Ok(_) => {
+                    array_node_ptr
+                },
+                Err(_) => {
+                    Box::from_raw(array_node_ptr);
+                    bucket[pos].get_ptr().unwrap()
+                }
+            }
+        }
+    }
+
     /// Attempt to insert into the HashMap
     /// Returns Ok on success and Error on failure containing the attempted
     /// insert data
     fn insert(&self, key: K, mut value: V) -> Result<(), (K, V)> {
-        let mut hash = self.hash(&key);
+        let hash = self.hash(&key);
+        let mut mut_hash = hash;
         let mut bucket = &self.head;
         let mut r = 0usize;
         while r < (KEY_SIZE - self.shift_step) {
-            // Get the position as defined by the lowest n bits of the key
-            let position = hash as usize & (bucket.len() - 1);
-            hash >>= self.shift_step;
-            let mut node = bucket[position].get_node();
+            let pos = hash as usize & (bucket.len() - 1);
+            mut_hash = hash >> self.shift_step;
             let mut fail_count = 0;
+            let mut node = bucket[pos].get_ptr();
+
             loop {
                 if fail_count > MAX_FAILURES {
-                    // Mark the node for expansion if there is too much contention
-                    bucket[position].mark();
+                    node = Some(self.expand_map(bucket, pos, r));
                 }
                 match node {
                     None => {
-                        // No data currently in this position! Try inserting
-                        value = match bucket[position].try_insertion(ptr::null_mut(), hash, value) {
-                            Ok(()) => { return Ok(()) },
-                            Err(val) => val
-                        }
+                        value = match self.try_insert(hash, value) {
+                            Ok(_) => { return Ok(()) },
+                            Err(old) => old
+                        };
                     },
-                    Some(node_ptr) => {
-                        if bucket[position].is_marked() {
-                            // EXPAND THE MAP
-                        }
-                        unsafe {
-                            match &*node_ptr {
-                                &Node::Array(ref array_node) => {
-                                    // This is safe because an ArrayNode will NEVER be removed
-                                    // Once it is in the data structure, it cannot be a hazard
-                                    bucket = &array_node.array;
-                                    break;
-                                },
-                                &Node::Data(ref data_node) => {
-                                    self.manager.protect(node_ptr, 0);
-                                    // If we cannot unwrap node2 here, something has gone very wrong
-                                    let node2 = bucket[position].get_node().unwrap();
-                                    if !ptr::eq(node_ptr, node2) {
-                                        node = Some(node2);
-                                        fail_count += 1;
-                                        continue;
-                                    } else if data_node.key == hash {
-                                        return Err((key, value))
-                                    } else {
-                                        // expand map and check if array node
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    Some(node_ptr) => {}                
                 }
             }
 
             r += self.shift_step;
         }
-
         Ok(())
     }
 
+    fn try_insert(&self, key: u64, value: V) -> Result<(), V> {
+        
+        
+        Ok(())
+    }
 }
-
 
 
 

@@ -4,7 +4,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::ptr;
 
-fn is_marked<T>(ptr: *mut T) -> bool {
+pub fn is_marked<T>(ptr: *mut T) -> bool {
     let ptr_usize = ptr as usize;
     match ptr_usize | 0x1 {
         1 => true,
@@ -12,12 +12,22 @@ fn is_marked<T>(ptr: *mut T) -> bool {
     }
 }
 
-fn is_array_node<T>(ptr: *mut T) -> bool {
+pub fn is_array_node<T>(ptr: *mut T) -> bool {
     let ptr_usize = ptr as usize;
     match ptr_usize | 0x2 {
         1 => true,
         _ => false
     }
+}
+
+pub fn unmark<T>(ptr: *mut T) -> *mut T {
+    let ptr_usize = ptr as usize;
+    (ptr_usize | 0x1) as *mut T
+}
+
+pub fn unmark_array_node<T>(ptr: *mut T) -> *mut T {
+    let ptr_usize = ptr as usize;
+    (ptr_usize | 0x2) as *mut T
 }
 
 #[derive(Debug)]
@@ -30,59 +40,14 @@ impl<K, V> AtomicMarkablePtr<K, V>
 where K: Eq + Hash + Debug,
       V: Send + Debug       
 {    
-    fn new_data_node(key: u64, value: V) -> Self {
-        let data_node: DataNode<K, V> = DataNode::new(key, value);
-        let data_ptr = Box::into_raw(Box::new(data_node));
-        let ptr = AtomicUsize::new(data_ptr as usize);
-        Self {
-            ptr: ptr,
-            marker: PhantomData
-        }
-    }
-
-    fn new_array_node(size: usize) -> Self {
-        let array_node: ArrayNode<K, V> = ArrayNode::new(size);
-        let node_ptr = Box::into_raw(Box::new(array_node));
-        let marked_ptr = (node_ptr as usize) | 0x2;
-        let ptr = AtomicUsize::new(marked_ptr);
-        Self {
-            ptr: ptr,
-            marker: PhantomData
-        }
-    }
-
     pub fn mark(&self) {
         self.ptr.fetch_or(0x1, Ordering::SeqCst);
     }
 
-    fn unmark(&self) -> *mut Node<K, V> {
-        (self.ptr.load(Ordering::SeqCst) | 0x1) as *mut Node<K, V>
-    }
-
-    fn is_marked(&self) -> bool {
-        match self.ptr.load(Ordering::SeqCst) & 0x1 {
-            1 => true,
-            _ => false
-        }
-    }
-
-    fn is_array_node(&self) -> bool {
-        match self.ptr.load(Ordering::SeqCst) & 0x2 {
-            1 => true,
-            _ => false
-        }
-    
-    }
-
-    pub fn get_node(&self) -> Option<*mut Node<K, V>> {
-        match self.ptr.load(Ordering::SeqCst) {
+    pub fn get_ptr(&self) -> Option<*mut Node<K, V>> {
+        match self.ptr.load(Ordering::Acquire) {
             0 => None,
-            ptr => {
-                Some(match ptr | 0x1 {
-                    1 => (ptr | 0x1) as *mut Node<K, V>,
-                    _ => ptr as *mut Node<K, V>
-                })
-            }
+            ptr_val => Some(ptr_val as *mut Node<K, V>)
         }
     }
 
@@ -103,6 +68,19 @@ where K: Eq + Hash + Debug,
             }
         }
     }
+
+    pub fn compare_exchange_weak(&self, old: *mut Node<K, V>, new: *mut Node<K, V>) 
+                -> Result<*mut Node<K, V>, *mut Node<K, V>> 
+    {
+        match self.ptr.compare_exchange_weak(old as usize, new as usize, Ordering::SeqCst, Ordering::Acquire) {
+            Ok(_) => Ok(old),
+            Err(_) => Err(new)
+        }
+    }
+
+    pub fn ptr(&self) -> &AtomicUsize {
+        &self.ptr
+    }
 }
 
 impl<K, V> Default for AtomicMarkablePtr<K, V>
@@ -119,8 +97,8 @@ where K: Eq + Hash + Debug,
 
 #[derive(Debug)]
 pub struct DataNode<K, V> {
-    key: u64,
-    value: Option<V>,
+    pub key: u64,
+    pub value: Option<V>,
     marker: PhantomData<K>
 }
 
@@ -152,7 +130,7 @@ where K: Eq + Hash + Debug,
 
 #[derive(Debug)]
 pub struct ArrayNode<K, V> {
-    array: Vec<AtomicMarkablePtr<K, V>>,
+    pub array: Vec<AtomicMarkablePtr<K, V>>,
     size: usize
 }
 
@@ -160,7 +138,7 @@ impl<K, V> ArrayNode<K, V>
 where K: Eq + Hash + Debug,
       V: Send + Debug  
 {
-    fn new(size: usize) -> Self {
+    pub fn new(size: usize) -> Self {
         let mut array = Vec::with_capacity(size);
         for _ in 0..size {
             array.push(AtomicMarkablePtr::default());
