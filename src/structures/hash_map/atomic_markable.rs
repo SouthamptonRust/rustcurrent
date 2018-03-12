@@ -30,6 +30,11 @@ pub fn unmark_array_node<T>(ptr: *mut T) -> *mut T {
     (ptr_usize | 0x2) as *mut T
 }
 
+pub fn mark_array_node<T>(ptr: *mut T) -> *mut T {
+    let ptr_usize = ptr as usize;
+    (ptr_usize | 0x2) as *mut T
+}
+
 #[derive(Debug)]
 pub struct AtomicMarkablePtr<K, V> {
     ptr: AtomicUsize,

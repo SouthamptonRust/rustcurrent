@@ -69,9 +69,10 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug> HashMap<K, V> {
             array_node.array[new_pos].ptr().store(node as usize, Ordering::Release);
 
             let array_node_ptr = Box::into_raw(Box::new(Node::Array(array_node)));
-            return match bucket[pos].compare_exchange_weak(node, array_node_ptr) {
+            let array_node_ptr_marked = atomic_markable::mark_array_node(array_node_ptr);
+            return match bucket[pos].compare_exchange_weak(node, array_node_ptr_marked) {
                 Ok(_) => {
-                    array_node_ptr
+                    array_node_ptr_marked
                 },
                 Err(_) => {
                     Box::from_raw(array_node_ptr);
@@ -90,14 +91,15 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug> HashMap<K, V> {
         let mut bucket = &self.head;
         let mut r = 0usize;
         while r < (KEY_SIZE - self.shift_step) {
-            let pos = hash as usize & (bucket.len() - 1);
-            mut_hash = hash >> self.shift_step;
+            let pos = mut_hash as usize & (bucket.len() - 1);
+            mut_hash = mut_hash >> self.shift_step;
             let mut fail_count = 0;
             let mut node = bucket[pos].get_ptr();
 
             loop {
                 if fail_count > MAX_FAILURES {
-                    node = Some(self.expand_map(bucket, pos, r));
+                    bucket[pos].mark();
+                    node = bucket[pos].get_ptr();
                 }
                 match node {
                     None => {
@@ -106,9 +108,10 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug> HashMap<K, V> {
                             Err(old) => old
                         };
                     },
-                    Some(node_ptr) => {
+                    Some(mut node_ptr) => {
                         if atomic_markable::is_marked(node_ptr) {
                             node = Some(self.expand_map(bucket, pos, r));
+                            node_ptr = node.unwrap();
                         }
                         if atomic_markable::is_array_node(node_ptr) {
                             unsafe {
@@ -130,6 +133,7 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug> HashMap<K, V> {
                                 continue;
                             } else {
                                 unsafe {
+                                    println!("{:b}", node_ptr as usize);
                                     match &*node_ptr {
                                         &Node::Array(_) => panic!("Unexpected array node!"),
                                         &Node::Data(ref data_node) => {
@@ -209,6 +213,11 @@ mod tests {
 
         assert!(map.insert(9, 9).is_ok());
         assert!(map.insert(9, 7).is_err());
+
+        for i in 0..240 {
+            println!("{}", i);
+            let _ = map.insert(i, i);
+        }
     }
 }
 
