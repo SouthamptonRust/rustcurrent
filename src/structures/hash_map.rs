@@ -55,23 +55,49 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug> HashMap<K, V> {
             // Get the position as defined by the lowest n bits of the key
             let position = hash as usize & (bucket.len() - 1);
             hash >>= self.shift_step;
-            let node = bucket[position].get_node();
-            let mut failCount = 0;
+            let mut node = bucket[position].get_node();
+            let mut fail_count = 0;
             loop {
-                if failCount > MAX_FAILURES {
+                if fail_count > MAX_FAILURES {
                     // Mark the node for expansion if there is too much contention
                     bucket[position].mark();
                 }
                 match node {
                     None => {
                         // No data currently in this position! Try inserting
-                        value = match bucket[position].try_insertion(hash, value) {
+                        value = match bucket[position].try_insertion(ptr::null_mut(), hash, value) {
                             Ok(()) => { return Ok(()) },
                             Err(val) => val
                         }
                     },
                     Some(node_ptr) => {
-
+                        if bucket[position].is_marked() {
+                            // EXPAND THE MAP
+                        }
+                        unsafe {
+                            match &*node_ptr {
+                                &Node::Array(ref array_node) => {
+                                    // This is safe because an ArrayNode will NEVER be removed
+                                    // Once it is in the data structure, it cannot be a hazard
+                                    bucket = &array_node.array;
+                                    break;
+                                },
+                                &Node::Data(ref data_node) => {
+                                    self.manager.protect(node_ptr, 0);
+                                    // If we cannot unwrap node2 here, something has gone very wrong
+                                    let node2 = bucket[position].get_node().unwrap();
+                                    if !ptr::eq(node_ptr, node2) {
+                                        node = Some(node2);
+                                        fail_count += 1;
+                                        continue;
+                                    } else if data_node.key == hash {
+                                        return Err((key, value))
+                                    } else {
+                                        // expand map and check if array node
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -86,7 +112,7 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug> HashMap<K, V> {
 
 #[derive(Debug)]
 struct AtomicMarkablePtr<K, V> {
-    ptr: Option<AtomicUsize>,
+    ptr: AtomicUsize,
     marker: PhantomData<Node<K, V>>
 }
 
@@ -99,7 +125,7 @@ where K: Eq + Hash + Debug,
         let data_ptr = Box::into_raw(Box::new(data_node));
         let ptr = AtomicUsize::new(data_ptr as usize);
         Self {
-            ptr: Some(ptr),
+            ptr: ptr,
             marker: PhantomData
         }
     }
@@ -110,70 +136,62 @@ where K: Eq + Hash + Debug,
         let marked_ptr = (node_ptr as usize) | 0x2;
         let ptr = AtomicUsize::new(marked_ptr);
         Self {
-            ptr: Some(ptr),
+            ptr: ptr,
             marker: PhantomData
         }
     }
 
     fn mark(&self) {
-        match self.ptr.as_ref() {
-            Some(ptr) => {
-                ptr.fetch_or(0x1, Ordering::SeqCst);
-            },
-            None => {}
-        }
+        self.ptr.fetch_or(0x1, Ordering::SeqCst);
     }
 
-    fn unmark(&self) -> Option<*mut Node<K, V>> {
-        match self.ptr.as_ref() {
-            Some(ptr) => {
-                Some((ptr.load(Ordering::SeqCst) | 0x1) as *mut Node<K, V>)
-            },
-            None => {
-                None
-            }
-        }
+    fn unmark(&self) -> *mut Node<K, V> {
+        (self.ptr.load(Ordering::SeqCst) | 0x1) as *mut Node<K, V>
     }
 
     fn is_marked(&self) -> bool {
-        match self.ptr.as_ref() {
-            Some(ptr) => {
-                match ptr.load(Ordering::SeqCst) & 0x1 {
-                    1 => true,
-                    _ => false
-                }
-            },
-            None => false
+        match self.ptr.load(Ordering::SeqCst) & 0x1 {
+            1 => true,
+            _ => false
         }
     }
 
     fn is_array_node(&self) -> bool {
-        match self.ptr.as_ref() {
-            Some(ptr) => {
-                match ptr.load(Ordering::SeqCst) & 0x2 {
-                    1 => true,
-                    _ => false
-                }
-            },
-            None => false
+        match self.ptr.load(Ordering::SeqCst) & 0x2 {
+            1 => true,
+            _ => false
         }
+    
     }
 
     fn get_node(&self) -> Option<*mut Node<K, V>> {
-        match self.ptr.as_ref() {
-            None => None,
-            Some(ptr) => {
-                Some(ptr.load(Ordering::SeqCst) as *mut Node<K, V>)
+        match self.ptr.load(Ordering::SeqCst) {
+            0 => None,
+            ptr => {
+                Some(match ptr | 0x1 {
+                    1 => (ptr | 0x1) as *mut Node<K, V>,
+                    _ => ptr as *mut Node<K, V>
+                })
             }
         }
     }
 
-    fn try_insertion(&self, hash: u64, value: V) -> Result<(), V> {
+    fn try_insertion(&self, old: *mut Node<K, V>, hash: u64, value: V) -> Result<(), V> {
         let data_node: DataNode<K, V> = DataNode::new(hash, value);
         let data_node_ptr = Box::into_raw(Box::new(data_node));
         let usize_ptr = data_node_ptr as usize;
+        let usize_old = old as usize;
 
-        Ok(())
+        match self.ptr.compare_exchange_weak(usize_old, usize_ptr, Ordering::SeqCst, Ordering::Acquire) {
+            Ok(usize_old) => Ok(()),
+            Err(_) => {
+                unsafe {
+                    let node = ptr::replace(data_node_ptr, DataNode::default());
+                    Box::from_raw(data_node_ptr);
+                    Err(node.value.unwrap())
+                }
+            }
+        }
     }
 }
 
@@ -183,7 +201,7 @@ where K: Eq + Hash + Debug,
 {
     fn default() -> Self {
         Self {
-            ptr: None,
+            ptr: AtomicUsize::default(),
             marker: PhantomData
         }
     }
@@ -192,7 +210,7 @@ where K: Eq + Hash + Debug,
 #[derive(Debug)]
 struct DataNode<K, V> {
     key: u64,
-    value: V,
+    value: Option<V>,
     marker: PhantomData<K>
 }
 
@@ -203,11 +221,24 @@ where K: Eq + Hash + Debug,
     fn new(key: u64, value: V) -> Self {
         Self {
             key,
-            value,
+            value: Some(value),
             marker: PhantomData
         }
     }
 }
+
+impl<K, V> Default for DataNode<K, V>
+where K: Eq + Hash + Debug,
+      V: Send + Debug
+{
+    fn default() -> Self {
+        Self {
+            key: 0u64,
+            value: None,
+            marker: PhantomData
+        }
+    }
+} 
 
 #[derive(Debug)]
 struct ArrayNode<K, V> {
