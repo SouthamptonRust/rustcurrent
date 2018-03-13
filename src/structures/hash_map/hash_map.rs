@@ -3,6 +3,7 @@ use std::hash::{Hash, Hasher, BuildHasher};
 use std::fmt::Debug;
 use std::fmt;
 use std::ptr;
+use std::borrow::Borrow;
 use std::collections::hash_map::RandomState;
 use memory::HPBRManager;
 use super::atomic_markable::{AtomicMarkablePtr, Node, DataNode, ArrayNode};
@@ -182,6 +183,44 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug> HashMap<K, V> {
                 Err((key, value))
             }
         }
+    }
+
+    fn get(&self, key: &K) -> Option<&V>
+    {
+        let hash = self.hash(key);
+        let mut mut_hash = hash;
+        let mut r = 0usize;
+        let mut bucket = &self.head;
+
+        while r < (KEY_SIZE - self.shift_step) {
+            let pos = mut_hash as usize & (bucket.len() - 1);
+            mut_hash >>= self.shift_step;
+
+            let node = bucket[pos].get_ptr();
+
+            match node {
+                None => {break;}
+                Some(node_ptr) => {
+                    if atomic_markable::is_array_node(node_ptr) {
+                        unsafe {
+                            match &*node_ptr {
+                                &Node::Data(_) => panic!("Unexpected data node!"),
+                                &Node::Array(ref array_node) => {
+                                    bucket = &array_node.array;
+                                }
+                            }
+                        }
+                    } else {
+                        self.manager.protect(node_ptr, 0);
+                        
+                    }
+                }
+            }
+
+            r += self.shift_step;
+        }
+
+        None
     }
 
     fn try_insert(&self, position: &AtomicMarkablePtr<K, V>, old: *mut Node<K, V>, key: u64, value: V) -> Result<(), V> {
