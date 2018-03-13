@@ -196,13 +196,14 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug> HashMap<K, V> {
             let pos = mut_hash as usize & (bucket.len() - 1);
             mut_hash >>= self.shift_step;
 
-            let node = bucket[pos].get_ptr();
+            let mut node = bucket[pos].get_ptr();
 
             match node {
                 None => {break;}
-                Some(node_ptr) => {
+                Some(mut node_ptr) => {
                     if atomic_markable::is_array_node(node_ptr) {
                         unsafe {
+                            node_ptr = atomic_markable::unmark(node_ptr);
                             match &*node_ptr {
                                 &Node::Data(_) => panic!("Unexpected data node!"),
                                 &Node::Array(ref array_node) => {
@@ -211,16 +212,73 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug> HashMap<K, V> {
                             }
                         }
                     } else {
-                        self.manager.protect(node_ptr, 0);
-                        
+                        self.manager.protect(atomic_markable::unmark(node_ptr), 0);
+                        // Check the hazard pointer
+                        if node != bucket[pos].get_ptr() {
+                            let mut fail_count = 0;
+                            while node != bucket[pos].get_ptr() {
+                                node = bucket[pos].get_ptr();
+                                match node {
+                                    None => { break; },
+                                    Some(new_ptr) => {
+                                        self.manager.protect(atomic_markable::unmark(atomic_markable::unmark_array_node(new_ptr)), 0);
+                                        fail_count += 1;
+                                        if fail_count > MAX_FAILURES {
+                                            bucket[pos].mark();
+                                            // Force a bucket update
+                                            bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
+                                            continue;
+                                        }
+                                        node_ptr = new_ptr;
+                                    }
+                                }            
+                            }
+                            // Hazard pointer should be fine now
+                            if atomic_markable::is_marked(node_ptr) {
+                               bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
+                                continue;
+                            } else if atomic_markable::is_array_node(node_ptr) {
+                                unsafe {
+                                    node_ptr = atomic_markable::unmark_array_node(node_ptr);
+                                    match &*node_ptr {
+                                        &Node::Data(_) => panic!("Unexpected data node!"),
+                                        &Node::Array(ref array_node) => { bucket = &array_node.array; continue; }
+                                    }
+                                }
+                            }
+                        }
+                        unsafe {
+                            match &*node_ptr {
+                                &Node::Array(_) => panic!("Unexpected array node!"),
+                                &Node::Data(ref data_node) => {
+                                    if data_node.key == hash {
+                                        return data_node.value.as_ref();
+                                    } else {
+                                        return None
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
 
             r += self.shift_step;
         }
-
-        None
+        // We should only be here if we got to the bottom
+        let pos = mut_hash as usize & (CHILD_SIZE - 1);
+        if let Some(node_ptr) = bucket[pos].get_ptr() {
+            unsafe {
+                match &*node_ptr {
+                    &Node::Array(_) => panic!("Unexpected array node!"),
+                    &Node::Data(ref data_node) => {
+                        return data_node.value.as_ref()
+                    }
+                }
+            }
+        } else {
+            return None
+        }
     }
 
     fn try_insert(&self, position: &AtomicMarkablePtr<K, V>, old: *mut Node<K, V>, key: u64, value: V) -> Result<(), V> {
@@ -240,6 +298,15 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug> HashMap<K, V> {
                         panic!("Unexpected array node!");
                     }
                 }
+            }
+        }
+    }
+
+    fn get_bucket<'a>(array_node: *mut Node<K, V>) -> &'a Vec<AtomicMarkablePtr<K, V>> {
+        unsafe {
+            match &*(atomic_markable::unmark_array_node(array_node)) {
+                &Node::Data(_) => panic!("Unexpected data node!"),
+                &Node::Array(ref array_node) => { &array_node.array }
             }
         }
     }
@@ -309,6 +376,8 @@ mod tests {
         }
         println!("{:?}", map);
 
+        assert_eq!(map.get(&3), Some(&3));
+        assert_eq!(map.get(&250), None);
     }
 }
 
