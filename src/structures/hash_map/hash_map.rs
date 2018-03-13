@@ -8,7 +8,8 @@ use memory::HPBRManager;
 use super::atomic_markable::{AtomicMarkablePtr, Node, DataNode, ArrayNode};
 use super::atomic_markable;
 
-const HEAD_SIZE: usize = 64;
+const HEAD_SIZE: usize = 256;
+const CHILD_SIZE: usize = 16;
 const KEY_SIZE: usize = 64;
 const MAX_FAILURES: u64 = 10;
 
@@ -35,7 +36,7 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug> HashMap<K, V> {
             head,
             hasher: RandomState::new(),
             head_size: HEAD_SIZE,
-            shift_step: f64::floor((HEAD_SIZE as f64).log2()) as usize,
+            shift_step: f64::floor((CHILD_SIZE as f64).log2()) as usize,
             manager: HPBRManager::new(100, 1)
         }   
     }
@@ -49,7 +50,7 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug> HashMap<K, V> {
     /// Attempt to add an array node level to the current position
     fn expand_map(&self, bucket: &Vec<AtomicMarkablePtr<K, V>>, pos: usize, shift_amount: usize) -> *mut Node<K, V> {
         // We know this node must exist
-        let node = bucket[pos].get_ptr().unwrap();
+        let node = atomic_markable::unmark(bucket[pos].get_ptr().unwrap());
         self.manager.protect(node, 0);
         if atomic_markable::is_array_node(node) {
             return node
@@ -59,13 +60,13 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug> HashMap<K, V> {
             return node2
         }
 
-        let array_node: ArrayNode<K, V> = ArrayNode::new(self.head_size);
+        let array_node: ArrayNode<K, V> = ArrayNode::new(CHILD_SIZE);
         unsafe {
             let hash = match &*node {
                 &Node::Data(ref data_node) => data_node.key,
                 &Node::Array(_) => {panic!("Unexpected array node!")}
             };
-            let new_pos = (hash >> (shift_amount + self.shift_step)) as usize & (self.head_size - 1);
+            let new_pos = (hash >> (shift_amount + self.shift_step)) as usize & (CHILD_SIZE - 1);
             array_node.array[new_pos].ptr().store(node as usize, Ordering::Release);
 
             let array_node_ptr = Box::into_raw(Box::new(Node::Array(array_node)));
@@ -114,6 +115,8 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug> HashMap<K, V> {
                             node_ptr = node.unwrap();
                         }
                         if atomic_markable::is_array_node(node_ptr) {
+                            println!("array node: {:?} -> {:?}", node_ptr, value);
+                            node_ptr = atomic_markable::unmark_array_node(node_ptr);
                             unsafe {
                                 // This dereference should be safe because array nodes cannot be removed
                                 match &*node_ptr {
@@ -135,7 +138,7 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug> HashMap<K, V> {
                                 unsafe {
                                     println!("{:b}", node_ptr as usize);
                                     match &*node_ptr {
-                                        &Node::Array(_) => panic!("Unexpected array node!"),
+                                        &Node::Array(_) => panic!("Unexpected array node!,{:b} -> {:?}", node_ptr as usize, value),
                                         &Node::Data(ref data_node) => {
                                             if data_node.key == hash {
                                                 return Err((key, value))
@@ -143,8 +146,9 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug> HashMap<K, V> {
                                             // If we get here, we have failed, but have a different key
                                             // We should thus expand because of contention
                                             node = Some(self.expand_map(bucket, pos, r));
+                                            println!("expanded! {:?}", value);
                                             if atomic_markable::is_array_node(node.unwrap()) {
-                                                match &*node.unwrap() {
+                                                match &*(atomic_markable::unmark_array_node(node.unwrap())) {
                                                     &Node::Array(ref array_node) => {
                                                         bucket = &array_node.array;
                                                         break;
@@ -202,6 +206,49 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug> HashMap<K, V> {
     }
 }
 
+impl<K, V> Debug for HashMap<K, V> 
+where K: Eq + Hash + Send + Debug,
+      V: Send + Debug
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        // Depth first printing, tab on each depth level
+        let mut string = "".to_owned();
+        let mut none_count = 0;
+        for node in &self.head {
+            if let Some(mut node_ptr) = node.get_ptr() {
+                string.push_str("\n");
+                if none_count > 0 {
+                    string.push_str(&format!("None x {}\n", none_count));
+                    none_count = 0;
+                }
+                node_ptr = atomic_markable::unmark_array_node(atomic_markable::unmark(node_ptr));
+                unsafe {
+                    match &*node_ptr {
+                        &Node::Array(ref array_node) => {array_node.to_string(&mut string, 1);},
+                        &Node::Data(ref data_node) => {string.push_str(&format!("{:X} ==> {:?}", data_node.key, data_node.value));}
+                    }
+                }
+            } else {
+                none_count += 1;
+            }
+        }
+        if none_count > 0 {
+            string.push_str(&format!("None x {}", none_count));
+        }
+
+        write!(f, "{}", string)
+    }
+}
+
+impl<K, V> Default for HashMap<K, V>
+where K: Eq + Hash + Send + Debug,
+      V: Send + Debug
+{
+    fn default() -> Self {
+        HashMap::new()
+    }
+}
+
 mod tests {
     use super::HashMap;
     use std::sync::Arc;
@@ -211,13 +258,18 @@ mod tests {
     fn test_single_thread_insert() {
         let map : HashMap<u8, u8> = HashMap::new();
 
-        assert!(map.insert(9, 9).is_ok());
-        assert!(map.insert(9, 7).is_err());
+        //assert!(map.insert(9, 9).is_ok());
+        //assert!(map.insert(9, 7).is_err());
 
         for i in 0..240 {
             println!("{}", i);
-            let _ = map.insert(i, i);
+            match map.insert(i, i) {
+                Ok(_) => println!("success"),
+                Err(_) => assert!(false)
+            }
         }
+        println!("{:?}", map);
+
     }
 }
 
