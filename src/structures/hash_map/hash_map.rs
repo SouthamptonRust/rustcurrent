@@ -78,7 +78,7 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
                 },
                 Err(_) => {
                     Box::from_raw(array_node_ptr);
-                    bucket[pos].get_ptr().unwrap()
+                    atomic_markable::unmark(bucket[pos].get_ptr().unwrap())
                 }
             }
         }
@@ -195,22 +195,16 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
         while r < (KEY_SIZE - self.shift_step) {
             let pos = mut_hash as usize & (bucket.len() - 1);
             mut_hash >>= self.shift_step;
-
+            println!("{}", r);
             let mut node = bucket[pos].get_ptr();
 
             match node {
-                None => {break;}
+                None => { return None; }
                 Some(mut node_ptr) => {
                     if atomic_markable::is_array_node(node_ptr) {
-                        unsafe {
-                            node_ptr = atomic_markable::unmark(node_ptr);
-                            match &*node_ptr {
-                                &Node::Data(_) => panic!("Unexpected data node!"),
-                                &Node::Array(ref array_node) => {
-                                    bucket = &array_node.array;
-                                }
-                            }
-                        }
+                        bucket = HashMap::get_bucket(node_ptr);
+                    } else if atomic_markable::is_marked(node_ptr) {
+                        bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
                     } else {
                         self.manager.protect(atomic_markable::unmark(node_ptr), 0);
                         // Check the hazard pointer
@@ -238,26 +232,15 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
                                bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
                                 continue;
                             } else if atomic_markable::is_array_node(node_ptr) {
-                                unsafe {
-                                    node_ptr = atomic_markable::unmark_array_node(node_ptr);
-                                    match &*node_ptr {
-                                        &Node::Data(_) => panic!("Unexpected data node!"),
-                                        &Node::Array(ref array_node) => { bucket = &array_node.array; continue; }
-                                    }
-                                }
+                                HashMap::get_bucket(node_ptr);
+                                continue;
                             }
                         }
-                        unsafe {
-                            match &*node_ptr {
-                                &Node::Array(_) => panic!("Unexpected array node!"),
-                                &Node::Data(ref data_node) => {
-                                    if data_node.key == hash {
-                                        return data_node.value.as_ref();
-                                    } else {
-                                        return None
-                                    }
-                                }
-                            }
+                        let data_node = self.get_data_node(node_ptr);
+                        if data_node.key == hash {
+                            return data_node.value.as_ref();
+                        } else {
+                            return None
                         }
                     }
                 }
@@ -528,13 +511,15 @@ mod tests {
                 Err(_) => assert!(false)
             }
         }
-        println!("{:?}", map);
-
+        
         assert_eq!(map.get(&3), Some(&3));
         assert_eq!(map.get(&250), None);
 
         assert_eq!(map.update(&3, &3, 7), Ok(()));
+        assert_eq!(map.update(&239, &239, 7), Ok(()));
         assert_eq!(map.get(&3), Some(&7));
+
+        println!("{:?}", map);
     }
 }
 
