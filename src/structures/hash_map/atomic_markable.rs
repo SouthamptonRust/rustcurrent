@@ -83,6 +83,15 @@ where K: Eq + Hash + Debug,
         }
     }
 
+    pub fn compare_exchange(&self, old: *mut Node<K, V>, new: *mut Node<K, V>) 
+                -> Result<*mut Node<K, V>, *mut Node<K, V>> 
+    {
+        match self.ptr.compare_exchange(old as usize, new as usize, Ordering::SeqCst, Ordering::Acquire) {
+            Ok(ptr) => Ok(ptr as *mut Node<K, V>),
+            Err(ptr) => Err(ptr as *mut Node<K, V>)
+        }
+    }
+
     pub fn ptr(&self) -> &AtomicUsize {
         &self.ptr
     }

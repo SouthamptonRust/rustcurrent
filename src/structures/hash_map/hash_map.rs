@@ -25,7 +25,7 @@ where K: Send + Debug,
     manager: HPBRManager<Node<K, V>>
 }
 
-impl<K: Eq + Hash + Debug + Send, V: Send + Debug> HashMap<K, V> {
+impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
     /// Create a new Wait-Free HashMap with the default head size
     fn new() -> Self {
         let mut head: Vec<AtomicMarkablePtr<K, V>> = Vec::with_capacity(HEAD_SIZE);
@@ -302,11 +302,149 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug> HashMap<K, V> {
         }
     }
 
+    // Returns the current value if update fails because our expected is wrong
+    // Otherwise returns the expected we passed in - this means we failed for a different reason
+    // TODO : fix pointer not being unmarked
+    fn update<'a, 'b>(&'a self, key: &K, expected: &'b V, mut new: V) -> Result<(), UpdateResult<'a, 'b, V>> {
+        let hash = self.hash(key);
+        let mut mut_hash = hash;
+        let mut r = 0usize;
+        let mut bucket = &self.head;
+
+        while r < (KEY_SIZE - self.shift_step) {
+            let pos = mut_hash as usize & (bucket.len() - 1);
+            mut_hash >>= self.shift_step;
+            let mut node = bucket[pos].get_ptr();
+
+            match node {
+                None => { return Err(UpdateResult::FailNotPossible(expected)) },
+                Some(mut node_ptr) => {
+                    if atomic_markable::is_array_node(node_ptr) {
+                        bucket = HashMap::get_bucket(node_ptr);
+                    } else if atomic_markable::is_marked(node_ptr) {
+                        bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
+                    } else {
+                        self.manager.protect(atomic_markable::unmark(node_ptr), 0);
+                        if node != bucket[pos].get_ptr() {
+                            let mut fail_count = 0;
+                            while node != bucket[pos].get_ptr() {
+                                node = bucket[pos].get_ptr();
+                                match node {
+                                    None => { return Err(UpdateResult::FailNotPossible(expected)); },
+                                    Some(new_ptr) => {
+                                        self.manager.protect(atomic_markable::unmark(atomic_markable::unmark_array_node(new_ptr)), 0);
+                                        fail_count += 1;
+                                        if fail_count > MAX_FAILURES {
+                                            bucket[pos].mark();
+                                            // Force a bucket update
+                                            bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
+                                            continue;
+                                        }
+                                        node_ptr = new_ptr;
+                                    }
+                                }
+                            }
+                            if atomic_markable::is_array_node(node_ptr) {
+                                bucket = HashMap::get_bucket(node_ptr);
+                                continue;
+                            } else if atomic_markable::is_marked(node_ptr) {
+                                bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
+                                continue;
+                            }
+                        }
+                        // Hazard pointer is safe now, so we can access the node
+                        let data_node = self.get_data_node(node_ptr);
+                        if data_node.key == hash {
+                            if data_node.value.as_ref() != Some(expected) {
+                                return Err(UpdateResult::FailDifferentValue(data_node.value.as_ref().unwrap()))
+                            }
+                            new = match self.try_update(&bucket[pos], node_ptr, hash, new) {
+                                Ok(()) => { 
+                                    self.manager.retire(node_ptr, 0);
+                                    return Ok(()) 
+                                },
+                                Err((value, current_ptr)) => {
+                                    if atomic_markable::is_array_node(current_ptr) {
+                                        bucket = HashMap::get_bucket(current_ptr);
+                                        value
+                                    } else if atomic_markable::is_marked(current_ptr) &&
+                                              ptr::eq(node_ptr, atomic_markable::unmark(current_ptr)) 
+                                    {
+                                        bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
+                                        value
+                                    } else {
+                                        let data_node = self.get_data_node(current_ptr);
+                                        return Err(UpdateResult::FailDifferentValue(data_node.value.as_ref().unwrap()));
+                                    }
+                                }
+                            }
+                        } else {
+                            return Err(UpdateResult::FailNotPossible(expected))
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Since we are at the bottom of the tree, we can only have data nodes here
+        let pos = mut_hash as usize & (CHILD_SIZE - 1);
+        let node = bucket[pos].get_ptr();
+        match node {
+            None => { Err(UpdateResult::FailNotPossible(expected)) },
+            Some(node_ptr) => {
+                let data_node = self.get_data_node(node_ptr);
+                if data_node.value.as_ref() == Some(expected) {
+                    match self.try_update(&bucket[pos], node_ptr, hash, new) {
+                        Ok(()) => {
+                            self.manager.retire(node_ptr, 0);
+                            Ok(())
+                        },
+                        Err((_, current)) => {
+                            let current_node = self.get_data_node(current);
+                            Err(UpdateResult::FailDifferentValue(current_node.value.as_ref().unwrap()))
+                        }
+                    }
+                } else {
+                    Err(UpdateResult::FailNotPossible(expected))
+                }
+            }
+        }
+    }
+
+    fn try_update(&self, position: &AtomicMarkablePtr<K, V>, old: *mut Node<K, V>, key: u64, value: V) -> Result<(), (V, *mut Node<K, V>)> {
+        let new_data_node: DataNode<K, V> = DataNode::new(key, value);
+        let data_node_ptr = Box::into_raw(Box::new(Node::Data(new_data_node)));
+
+        match position.compare_exchange(old, data_node_ptr) {
+            Ok(_) => Ok(()),
+            Err(current) => {
+                unsafe {
+                    if let Node::Data(node) = ptr::replace(data_node_ptr, Node::Data(DataNode::default())) {
+                        let data = node.value.unwrap();
+                        Box::from_raw(data_node_ptr);
+                        Err((data, current))
+                    } else {
+                        panic!("Unexpected array node!")
+                    }
+                }
+            }
+        }
+    }
+
     fn get_bucket<'a>(array_node: *mut Node<K, V>) -> &'a Vec<AtomicMarkablePtr<K, V>> {
         unsafe {
             match &*(atomic_markable::unmark_array_node(array_node)) {
                 &Node::Data(_) => panic!("Unexpected data node!"),
                 &Node::Array(ref array_node) => { &array_node.array }
+            }
+        }
+    }
+
+    fn get_data_node(&self, node_ptr: *mut Node<K, V>) -> & DataNode<K, V> {
+        unsafe {
+            match &*(atomic_markable::unmark(node_ptr)) {
+                &Node::Data(ref data_node) => { data_node },
+                &Node::Array(_) => panic!("Unexpected array node!")
             }
         }
     }
@@ -348,10 +486,26 @@ where K: Eq + Hash + Send + Debug,
 
 impl<K, V> Default for HashMap<K, V>
 where K: Eq + Hash + Send + Debug,
-      V: Send + Debug
+      V: Eq + Send + Debug
 {
     fn default() -> Self {
         HashMap::new()
+    }
+}
+
+#[derive(Debug)]
+pub enum UpdateResult<'inside, 'expected: 'inside, V: 'expected + Eq> {
+    FailNotPossible(&'expected V),
+    FailDifferentValue(&'inside V)
+}
+
+impl<'inside, 'expected: 'inside, V: 'expected + Eq> PartialEq for UpdateResult<'inside, 'expected, V> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (&UpdateResult::FailNotPossible(v1), &UpdateResult::FailNotPossible(v2)) => v1 == v2,
+            (&UpdateResult::FailDifferentValue(v1), &UpdateResult::FailDifferentValue(v2)) => v1 == v2,
+            _ => false
+        }
     }
 }
 
@@ -378,6 +532,9 @@ mod tests {
 
         assert_eq!(map.get(&3), Some(&3));
         assert_eq!(map.get(&250), None);
+
+        assert_eq!(map.update(&3, &3, 7), Ok(()));
+        assert_eq!(map.get(&3), Some(&7));
     }
 }
 
