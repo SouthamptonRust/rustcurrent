@@ -1,7 +1,6 @@
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::fmt::Debug;
-use std::hash::Hash;
 
 pub fn is_marked<T>(ptr: *mut T) -> bool {
     let ptr_usize = ptr as usize;
@@ -35,13 +34,16 @@ pub fn mark_array_node<T>(ptr: *mut T) -> *mut T {
 }
 
 #[derive(Debug)]
-pub struct AtomicMarkablePtr<K, V> {
+pub struct AtomicMarkablePtr<K, V>
+where K: Debug + Send,
+      V: Send + Debug 
+{
     ptr: AtomicUsize,
     marker: PhantomData<(K, V)>
 }
 
 impl<K, V> AtomicMarkablePtr<K, V>
-where K: Eq + Hash + Debug,
+where K: Send + Debug,
       V: Send + Debug       
 {    
     pub fn mark(&self) {
@@ -78,8 +80,23 @@ where K: Eq + Hash + Debug,
     }
 }
 
+impl<K, V> Drop for AtomicMarkablePtr<K, V>
+where K: Send + Debug,
+      V: Send + Debug
+{
+    fn drop(&mut self) {
+        let mut ptr = self.ptr.load(Ordering::Relaxed) as *mut Node<K, V>;
+        ptr = unmark(unmark_array_node(ptr));
+        if !ptr.is_null() {
+            unsafe {
+                Box::from_raw(ptr);
+            }
+        }
+    }
+}
+
 impl<K, V> Default for AtomicMarkablePtr<K, V>
-where K: Eq + Hash + Debug,
+where K: Debug + Send,
       V: Send + Debug
 {
     fn default() -> Self {
@@ -91,14 +108,14 @@ where K: Eq + Hash + Debug,
 } 
 
 #[derive(Debug)]
-pub struct DataNode<K, V> {
+pub struct DataNode<K, V: Debug> {
     pub key: u64,
     pub value: Option<V>,
     marker: PhantomData<K>
 }
 
 impl<K, V> DataNode<K, V> 
-where K: Eq + Hash + Debug,
+where K: Send + Debug,
       V: Send + Debug 
 {
     pub fn new(key: u64, value: V) -> Self {
@@ -111,7 +128,7 @@ where K: Eq + Hash + Debug,
 }
 
 impl<K, V> Default for DataNode<K, V>
-where K: Eq + Hash + Debug,
+where K: Send + Debug,
       V: Send + Debug
 {
     fn default() -> Self {
@@ -121,16 +138,19 @@ where K: Eq + Hash + Debug,
             marker: PhantomData
         }
     }
-} 
+}
 
 #[derive(Debug)]
-pub struct ArrayNode<K, V> {
+pub struct ArrayNode<K, V> 
+where K: Debug + Send,
+      V: Send + Debug
+{
     pub array: Vec<AtomicMarkablePtr<K, V>>,
     size: usize
 }
 
 impl<K, V> ArrayNode<K, V>
-where K: Eq + Hash + Debug,
+where K: Debug + Send,
       V: Send + Debug  
 {
     pub fn new(size: usize) -> Self {
@@ -188,7 +208,10 @@ where K: Eq + Hash + Debug,
 }
 
 #[derive(Debug)]
-pub enum Node<K, V> {
+pub enum Node<K, V> 
+where K: Send + Debug,
+      V: Send + Debug
+{
     Data(DataNode<K, V>),
     Array(ArrayNode<K, V>)
 }

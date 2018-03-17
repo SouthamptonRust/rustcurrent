@@ -3,6 +3,7 @@ use std::hash::{Hash, Hasher, BuildHasher};
 use std::fmt::Debug;
 use std::fmt;
 use std::ptr;
+use std::mem;
 use std::borrow::Borrow;
 use std::collections::hash_map::RandomState;
 use memory::HPBRManager;
@@ -27,7 +28,7 @@ where K: Send + Debug,
 
 impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
     /// Create a new Wait-Free HashMap with the default head size
-    fn new() -> Self {
+    pub fn new() -> Self {
         let mut head: Vec<AtomicMarkablePtr<K, V>> = Vec::with_capacity(HEAD_SIZE);
         for _ in 0..HEAD_SIZE {
             head.push(AtomicMarkablePtr::default());
