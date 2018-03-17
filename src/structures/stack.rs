@@ -113,14 +113,12 @@ impl<T: Debug + Send> Drop for Stack<T> {
     // This means we can walk the stack, freeing all the data within
     fn drop(&mut self) {
         let mut current = self.head.load(Ordering::Relaxed);
-        let mut count = 0;
         while !ptr::eq(current, ptr::null()) {
             unsafe {
                 let next = (*current).next.load(Ordering::Relaxed);
                 Box::from_raw(current);
                 current = next;
             }
-            count += 1;
         }
     }
 }
@@ -198,7 +196,6 @@ impl<T: Debug + Send> EliminationLayer<T> {
         }
     }
 
-    // TODO finish writing this
     fn try_eliminate(&self, op: OpType, data: Option<T>) -> Result<Option<T>, Option<T>> {
         let op_info = OpInfo::new(op.clone(), data);
         let op_info_ptr = Box::into_raw(Box::new(op_info));
@@ -428,6 +425,7 @@ impl OpType {
 }
 
 mod tests {
+    #![allow(unused_imports)]
     use super::Stack;
     use std::sync::atomic::Ordering;
     use std::thread;
@@ -447,7 +445,7 @@ mod tests {
     }
 
     fn test_push_single_threaded() {
-        let mut stack : Stack<u8> = Stack::new(true);
+        let stack : Stack<u8> = Stack::new(true);
 
         stack.push(4u8);
         println!("{:?}", stack);
@@ -464,7 +462,7 @@ mod tests {
     }
 
     fn test_pop_single_threaded() {
-        let mut stack : Stack<Foo> = Stack::new(true);
+        let stack : Stack<Foo> = Stack::new(true);
 
         stack.push(Foo {data: 1});
         stack.push(Foo {data: 2});
@@ -481,6 +479,7 @@ mod tests {
         println!("{:?}", stack.manager);
     }
 
+    #[test]
     #[ignore]
     fn test_thread_id() {
         for i in 0..10 {
