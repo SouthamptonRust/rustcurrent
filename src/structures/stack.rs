@@ -82,7 +82,7 @@ impl<T: Send + Debug> Stack<T> {
         }
     }
 
-    pub fn try_pop(&self) -> Result<Option<T>, ()> {
+    fn try_pop(&self) -> Result<Option<T>, ()> {
         let old_head = self.head.load(Ordering::Acquire);
         if old_head.is_null() {
             return Ok(None)

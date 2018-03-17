@@ -36,7 +36,7 @@ impl<T: Send + Debug> Queue<T> {
         }
     }
 
-    pub fn try_enqueue(&self, val: Box<Node<T>>) -> Result<(), Box<Node<T>>> {
+    fn try_enqueue(&self, val: Box<Node<T>>) -> Result<(), Box<Node<T>>> {
         let tail = self.tail.load(Ordering::Acquire);
         self.manager.protect(tail, 0);
         // Is the tail still consistent? Required for the hazard pointer to work

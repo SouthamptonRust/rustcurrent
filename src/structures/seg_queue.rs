@@ -139,7 +139,7 @@ impl<T: Send + Debug> SegQueue<T> {
         }
     }
 
-    pub fn try_dequeue(&self, vals: &mut[usize]) -> Result<Option<T>, ()> {
+    fn try_dequeue(&self, vals: &mut[usize]) -> Result<Option<T>, ()> {
         let head = self.head.load(Ordering::Acquire);
         self.manager.protect(head, 0);
         if !ptr::eq(head, self.head.load(Ordering::Acquire)) {

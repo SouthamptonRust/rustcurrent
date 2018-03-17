@@ -90,7 +90,7 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
     /// Attempt to insert into the HashMap
     /// Returns Ok on success and Error on failure containing the attempted
     /// insert data
-    fn insert(&self, key: K, mut value: V) -> Result<(), (K, V)> {
+    pub fn insert(&self, key: K, mut value: V) -> Result<(), (K, V)> {
         let hash = self.hash(&key);
         let mut mut_hash = hash;
         let mut bucket = &self.head;
@@ -185,7 +185,7 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
         }
     }
 
-    fn get(&self, key: &K) -> Option<&V>
+    pub fn get(&self, key: &K) -> Option<&V>
     {
         let hash = self.hash(key);
         let mut mut_hash = hash;
@@ -286,7 +286,7 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
 
     // Returns the current value if update fails because our expected is wrong
     // Otherwise returns the expected we passed in - this means we failed for a different reason
-    fn update<'a, 'b>(&'a self, key: &K, expected: &'b V, mut new: V) -> Result<(), UpdateResult<'a, 'b, V>> {
+    pub fn update<'a, 'b>(&'a self, key: &K, expected: &'b V, mut new: V) -> Result<(), UpdateResult<'a, 'b, V>> {
         let hash = self.hash(key);
         let mut mut_hash = hash;
         let mut r = 0usize;
@@ -413,7 +413,7 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
         }
     }
 
-    fn remove(&self, key: &K, expected: &V) -> Option<V> {
+    pub fn remove(&self, key: &K, expected: &V) -> Option<V> {
         let hash = self.hash(key);
         let mut mut_hash = hash;
         let mut r = 0usize;
