@@ -10,8 +10,6 @@ use rand;
 use memory::HPBRManager;
 use std::mem;
 
-// TODO - find out why data starts to set itself to impossible address - check address of data at literally every stage
-
 #[derive(Debug)]
 pub struct Stack<T: Send + Debug> {
     head: AtomicPtr<Node<T>>,

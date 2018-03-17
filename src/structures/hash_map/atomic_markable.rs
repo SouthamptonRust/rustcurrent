@@ -2,7 +2,6 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::ptr;
 
 pub fn is_marked<T>(ptr: *mut T) -> bool {
     let ptr_usize = ptr as usize;
@@ -53,24 +52,6 @@ where K: Eq + Hash + Debug,
         match self.ptr.load(Ordering::SeqCst) {
             0 => None,
             ptr_val => Some(ptr_val as *mut Node<K, V>)
-        }
-    }
-
-    fn try_insertion(&self, old: *mut Node<K, V>, hash: u64, value: V) -> Result<(), V> {
-        let data_node: DataNode<K, V> = DataNode::new(hash, value);
-        let data_node_ptr = Box::into_raw(Box::new(data_node));
-        let usize_ptr = data_node_ptr as usize;
-        let usize_old = old as usize;
-
-        match self.ptr.compare_exchange_weak(usize_old, usize_ptr, Ordering::SeqCst, Ordering::Acquire) {
-            Ok(usize_old) => Ok(()),
-            Err(_) => {
-                unsafe {
-                    let node = ptr::replace(data_node_ptr, DataNode::default());
-                    Box::from_raw(data_node_ptr);
-                    Err(node.value.unwrap())
-                }
-            }
         }
     }
 

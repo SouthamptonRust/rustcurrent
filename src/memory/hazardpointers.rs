@@ -1,4 +1,3 @@
-use memory::recordmanager::RecordManager;
 use std::sync::atomic::{AtomicPtr, Ordering, AtomicBool};
 use std::sync::atomic;
 use std::fmt::Debug;
@@ -18,7 +17,7 @@ pub struct HPBRManager<T: Send + Debug> {
 
 impl<'a, T: Send + Debug + 'a> Debug for HPBRManager<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut thread_info_string = match self.thread_info.get() {
+        let thread_info_string = match self.thread_info.get() {
             None => "".to_owned(),
             Some(cell) => {
                 let mut result = "".to_owned();
@@ -49,9 +48,8 @@ impl<'a, T: Send + Debug> HPBRManager<T> {
     }
 
     fn allocate_hp(&self) -> *mut HazardPointer<T> {
-        let mut new_hp = HazardPointer::new();
+        let new_hp = HazardPointer::new();
         let new_hp_ptr =  Box::into_raw(Box::new(new_hp));
-        let old_head = self.head.load(Ordering::Acquire);
 
         // CAS push the new hazard pointer onto the global list
         // We do not need to worry about freeing as we will not be deleting hazard pointers
@@ -259,6 +257,7 @@ impl<T: Send + Debug> Drop for ThreadLocalInfo<T> {
 }
 
 mod tests {
+    #![allow(unused_imports)]
     use super::HPBRManager;
 
     #[derive(Debug)]

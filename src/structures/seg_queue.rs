@@ -347,6 +347,7 @@ impl<T: Send + Debug> Drop for Node<T> {
 }
 
 mod tests {
+    #![allow(unused_imports)]
     use super::SegQueue;
     use std::collections::HashSet;
     use std::sync::Arc;

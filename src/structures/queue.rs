@@ -164,6 +164,7 @@ impl<T: Send + Debug> Default for Node<T> {
 }
 
 mod tests {
+    #![allow(unused_imports)]
     use super::Queue;
     use std::sync::Arc;
     use std::thread;
