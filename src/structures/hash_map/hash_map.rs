@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use std::sync::atomic::{Ordering};
 use std::hash::{Hash, Hasher, BuildHasher};
 use std::fmt::Debug;
 use std::fmt;
@@ -42,7 +42,10 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
         }   
     }
 
-    fn hash(&self, key: &K) -> u64 {
+    fn hash<Q: ?Sized>(&self, key: &Q) -> u64 
+    where K: Borrow<Q>,
+          Q: Eq + Hash + Send + Debug
+    {
         let mut hasher = self.hasher.build_hasher();
         key.hash(&mut hasher);
         hasher.finish()
@@ -362,6 +365,7 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
                     }
                 }
             }
+            r += self.shift_step;
         }
         
         // Since we are at the bottom of the tree, we can only have data nodes here
@@ -494,6 +498,7 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
                     }
                 }
             }
+            r += self.shift_step;
         }
         let pos = mut_hash as usize & (bucket.len() - 1);
         let node = bucket[pos].get_ptr();
@@ -610,6 +615,7 @@ impl<'inside, 'expected: 'inside, V: 'expected + Eq> PartialEq for UpdateResult<
 }
 
 mod tests {
+    #![allow(unused_imports)]
     use super::HashMap;
     use std::sync::Arc;
     use std::thread;
