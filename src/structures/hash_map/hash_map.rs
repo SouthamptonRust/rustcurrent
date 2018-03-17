@@ -116,7 +116,6 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
                             node_ptr = node.unwrap();
                         }
                         if atomic_markable::is_array_node(node_ptr) {
-                            println!("array node: {:?} -> {:?}", node_ptr, value);
                             node_ptr = atomic_markable::unmark_array_node(node_ptr);
                             unsafe {
                                 // This dereference should be safe because array nodes cannot be removed
@@ -137,7 +136,6 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
                                 continue;
                             } else {
                                 unsafe {
-                                    println!("{:b}", node_ptr as usize);
                                     match &*node_ptr {
                                         &Node::Array(_) => panic!("Unexpected array node!,{:b} -> {:?}", node_ptr as usize, value),
                                         &Node::Data(ref data_node) => {
@@ -147,7 +145,6 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
                                             // If we get here, we have failed, but have a different key
                                             // We should thus expand because of contention
                                             node = Some(self.expand_map(bucket, pos, r));
-                                            println!("expanded! {:?}", value);
                                             if atomic_markable::is_array_node(node.unwrap()) {
                                                 match &*(atomic_markable::unmark_array_node(node.unwrap())) {
                                                     &Node::Array(ref array_node) => {
@@ -195,7 +192,6 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
         while r < (KEY_SIZE - self.shift_step) {
             let pos = mut_hash as usize & (bucket.len() - 1);
             mut_hash >>= self.shift_step;
-            println!("{}", r);
             let mut node = bucket[pos].get_ptr();
 
             match node {
@@ -429,10 +425,8 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
                 Some(mut node_ptr) => {
                     if atomic_markable::is_array_node(node_ptr) {
                         bucket = HashMap::get_bucket(node_ptr);
-                        continue;
                     } else if atomic_markable::is_marked(node_ptr) {
                         bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
-                        continue;
                     } else {
                         self.manager.protect(atomic_markable::unmark(node_ptr), 0);
                         if node != bucket[pos].get_ptr() {
@@ -454,6 +448,7 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
                                     }
                                 }
                             }
+                            // Hazard pointer is safe here
                             if atomic_markable::is_array_node(node_ptr) {
                                 bucket = HashMap::get_bucket(node_ptr);
                                 continue;
@@ -461,39 +456,39 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
                                 bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
                                 continue;
                             }
-                            // Hazard pointer is safe here
-                            let data_node = self.get_data_node(node_ptr);
-                            if data_node.key == hash {
-                                if data_node.value.as_ref() != Some(expected) {
-                                    return None
-                                }
-                                match self.try_remove(&bucket[pos], node_ptr) {
-                                    Ok(()) => {
-                                        // Get the value out of the node_ptr, return it, retire it?
-                                        unsafe {
-                                            let owned_node = ptr::replace(node_ptr, Node::Data(DataNode::default()));
-                                            if let Node::Data(node) = owned_node {
-                                                let data = node.value;
-                                                self.manager.retire(node_ptr, 0);
-                                                return data;
-                                            } else {
-                                                panic!("Unexpected array node!");
-                                            }
-                                        }
-                                    },
-                                    Err(current) => {
-                                        if atomic_markable::is_array_node(current) {
-                                            bucket = HashMap::get_bucket(current);
-                                        } else if atomic_markable::is_marked(current)
-                                          && ptr::eq(atomic_markable::unmark(current), node_ptr) 
-                                        {
-                                            bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
+                        }
+                        let data_node = self.get_data_node(node_ptr);
+                        if data_node.key == hash {
+                            if data_node.value.as_ref() != Some(expected) {
+                                return None
+                            }
+                            match self.try_remove(&bucket[pos], node_ptr) {
+                                Ok(()) => {
+                                    // Get the value out of the node_ptr, return it, retire it?
+                                    unsafe {
+                                        let owned_node = ptr::replace(node_ptr, Node::Data(DataNode::default()));
+                                        if let Node::Data(node) = owned_node {
+                                            let data = node.value;
+                                            self.manager.retire(node_ptr, 0);
+                                            return data;
                                         } else {
-                                            return None
+                                            panic!("Unexpected array node!");
                                         }
+                                    }
+                                },
+                                Err(current) => {
+                                    if atomic_markable::is_array_node(current) {
+                                        bucket = HashMap::get_bucket(current);
+                                    } else if atomic_markable::is_marked(current)
+                                        && ptr::eq(atomic_markable::unmark(current), node_ptr) 
+                                    {
+                                        bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
+                                    } else {
+                                        return None
                                     }
                                 }
                             }
+                        } else {
                             return None
                         }
                     }
@@ -620,16 +615,15 @@ mod tests {
     use std::thread;
 
     #[test]
-    fn test_single_thread_insert() {
+    fn test_single_thread_semantics() {
         let map : HashMap<u8, u8> = HashMap::new();
 
         //assert!(map.insert(9, 9).is_ok());
         //assert!(map.insert(9, 7).is_err());
 
         for i in 0..240 {
-            println!("{}", i);
             match map.insert(i, i) {
-                Ok(_) => println!("success"),
+                Ok(_) => {},
                 Err(_) => assert!(false)
             }
         }
@@ -642,6 +636,40 @@ mod tests {
         assert_eq!(map.get(&3), Some(&7));
 
         println!("{:?}", map);
+
+        println!("{:?}", map.get(&3));
+        assert_eq!(map.remove(&3, &7), Some(7));
+        assert_eq!(map.remove(&250, &2), None);
+
+        assert_eq!(map.get(&3), None);
+    }
+
+    #[test]
+    fn test_multithreaded_insert() {
+        let map: Arc<HashMap<u16, String>> = Arc::new(HashMap::new());
+
+        for i in 0..10 {
+            let map_clone = map.clone();
+            thread::spawn(move || {
+                for j in 0..2000 {
+                    let val = format!("{}--{}", i, j);
+                    match map_clone.insert(j, val) {
+                        Ok(()) => {},
+                        Err((key, value)) => {
+                            let expected = map_clone.get(&key);
+                            match expected {
+                                Some(expected_value) => {
+                                    let _ = map_clone.update(&key, expected_value, value);
+                                },
+                                None => {}
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        println!("{:?}", map.get(&1174));
     }
 }
 
