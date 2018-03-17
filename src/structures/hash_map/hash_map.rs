@@ -287,7 +287,6 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
 
     // Returns the current value if update fails because our expected is wrong
     // Otherwise returns the expected we passed in - this means we failed for a different reason
-    // TODO : fix pointer not being unmarked
     fn update<'a, 'b>(&'a self, key: &K, expected: &'b V, mut new: V) -> Result<(), UpdateResult<'a, 'b, V>> {
         let hash = self.hash(key);
         let mut mut_hash = hash;
@@ -411,6 +410,129 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
                     }
                 }
             }
+        }
+    }
+
+    fn remove(&self, key: &K, expected: &V) -> Option<V> {
+        let hash = self.hash(key);
+        let mut mut_hash = hash;
+        let mut r = 0usize;
+        let mut bucket = &self.head;
+
+        while r < (KEY_SIZE - self.shift_step) {
+            let pos = mut_hash as usize & (bucket.len() - 1);
+            mut_hash >>= self.shift_step;
+            let mut node = bucket[pos].get_ptr();
+
+            match node {
+                None => { return None; },
+                Some(mut node_ptr) => {
+                    if atomic_markable::is_array_node(node_ptr) {
+                        bucket = HashMap::get_bucket(node_ptr);
+                        continue;
+                    } else if atomic_markable::is_marked(node_ptr) {
+                        bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
+                        continue;
+                    } else {
+                        self.manager.protect(atomic_markable::unmark(node_ptr), 0);
+                        if node != bucket[pos].get_ptr() {
+                            let mut fail_count = 0;
+                            while node != bucket[pos].get_ptr() {
+                                node = bucket[pos].get_ptr();
+                                match node {
+                                    None => { return None; },
+                                    Some(new_ptr) => {
+                                        self.manager.protect(atomic_markable::unmark(atomic_markable::unmark_array_node(new_ptr)), 0);
+                                        fail_count += 1;
+                                        if fail_count > MAX_FAILURES {
+                                            bucket[pos].mark();
+                                            // Force a bucket update
+                                            bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
+                                            continue;
+                                        }
+                                        node_ptr = new_ptr;
+                                    }
+                                }
+                            }
+                            if atomic_markable::is_array_node(node_ptr) {
+                                bucket = HashMap::get_bucket(node_ptr);
+                                continue;
+                            } else if atomic_markable::is_marked(node_ptr) {
+                                bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
+                                continue;
+                            }
+                            // Hazard pointer is safe here
+                            let data_node = self.get_data_node(node_ptr);
+                            if data_node.key == hash {
+                                if data_node.value.as_ref() != Some(expected) {
+                                    return None
+                                }
+                                match self.try_remove(&bucket[pos], node_ptr) {
+                                    Ok(()) => {
+                                        // Get the value out of the node_ptr, return it, retire it?
+                                        unsafe {
+                                            let owned_node = ptr::replace(node_ptr, Node::Data(DataNode::default()));
+                                            if let Node::Data(node) = owned_node {
+                                                let data = node.value;
+                                                self.manager.retire(node_ptr, 0);
+                                                return data;
+                                            } else {
+                                                panic!("Unexpected array node!");
+                                            }
+                                        }
+                                    },
+                                    Err(current) => {
+                                        if atomic_markable::is_array_node(current) {
+                                            bucket = HashMap::get_bucket(current);
+                                        } else if atomic_markable::is_marked(current)
+                                          && ptr::eq(atomic_markable::unmark(current), node_ptr) 
+                                        {
+                                            bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
+                                        } else {
+                                            return None
+                                        }
+                                    }
+                                }
+                            }
+                            return None
+                        }
+                    }
+                }
+            }
+        }
+        let pos = mut_hash as usize & (bucket.len() - 1);
+        let node = bucket[pos].get_ptr();
+        match node {
+            None => None,
+            Some(node_ptr) => {
+                let data_node = self.get_data_node(node_ptr);
+                if data_node.value.as_ref() == Some(expected) {
+                    match self.try_remove(&bucket[pos], node_ptr) {
+                        Err(_) => None,
+                        Ok(()) => {
+                            unsafe {
+                                let owned_node = ptr::replace(node_ptr, Node::Data(DataNode::default()));
+                                if let Node::Data(node) = owned_node {
+                                    let data = node.value;
+                                    self.manager.retire(node_ptr, 0);
+                                    data
+                                } else {
+                                    panic!("Unexpected array node!");
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    fn try_remove(&self, position: &AtomicMarkablePtr<K, V>, old: *mut Node<K, V>) -> Result<(), *mut Node<K, V>> {
+        match position.compare_exchange(old, ptr::null_mut()) {
+            Ok(_) => Ok(()),
+            Err(current) => Err(current)
         }
     }
 
