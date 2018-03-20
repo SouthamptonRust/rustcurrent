@@ -3,7 +3,6 @@ use std::hash::{Hash, Hasher, BuildHasher};
 use std::fmt::Debug;
 use std::fmt;
 use std::ptr;
-use std::mem;
 use std::borrow::Borrow;
 use std::collections::hash_map::RandomState;
 use memory::HPBRManager;
@@ -76,13 +75,13 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
 
             let array_node_ptr = Box::into_raw(Box::new(Node::Array(array_node)));
             let array_node_ptr_marked = atomic_markable::mark_array_node(array_node_ptr);
-            return match bucket[pos].compare_exchange_weak(node, array_node_ptr_marked) {
+            return match bucket[pos].compare_exchange(node, array_node_ptr_marked) {
                 Ok(_) => {
                     array_node_ptr_marked
                 },
-                Err(_) => {
+                Err(current) => {
                     Box::from_raw(array_node_ptr);
-                    atomic_markable::unmark(bucket[pos].get_ptr().unwrap())
+                    current
                 }
             }
         }
@@ -287,7 +286,7 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
 
     // Returns the current value if update fails because our expected is wrong
     // Otherwise returns the expected we passed in - this means we failed for a different reason
-    pub fn update<'a, 'b>(&'a self, key: &K, expected: &'b V, mut new: V) -> Result<(), UpdateResult<'a, 'b, V>> {
+    pub fn update<'a, 'b>(&'a self, key: &K, expected: &'b V, mut new: V) -> Result<(), V> {
         let hash = self.hash(key);
         let mut mut_hash = hash;
         let mut r = 0usize;
@@ -299,7 +298,7 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
             let mut node = bucket[pos].get_ptr();
 
             match node {
-                None => { return Err(UpdateResult::FailNotPossible(expected)) },
+                None => { return Err(new) },
                 Some(mut node_ptr) => {
                     if atomic_markable::is_array_node(node_ptr) {
                         bucket = HashMap::get_bucket(node_ptr);
@@ -312,7 +311,7 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
                             while node != bucket[pos].get_ptr() {
                                 node = bucket[pos].get_ptr();
                                 match node {
-                                    None => { return Err(UpdateResult::FailNotPossible(expected)); },
+                                    None => { return Err(new); },
                                     Some(new_ptr) => {
                                         self.manager.protect(atomic_markable::unmark(atomic_markable::unmark_array_node(new_ptr)), 0);
                                         fail_count += 1;
@@ -338,7 +337,7 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
                         let data_node = self.get_data_node(node_ptr);
                         if data_node.key == hash {
                             if data_node.value.as_ref() != Some(expected) {
-                                return Err(UpdateResult::FailDifferentValue(data_node.value.as_ref().unwrap()))
+                                return Err(new)
                             }
                             new = match self.try_update(&bucket[pos], node_ptr, hash, new) {
                                 Ok(()) => { 
@@ -355,13 +354,12 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
                                         bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
                                         value
                                     } else {
-                                        let data_node = self.get_data_node(current_ptr);
-                                        return Err(UpdateResult::FailDifferentValue(data_node.value.as_ref().unwrap()));
+                                        return Err(value);
                                     }
                                 }
                             }
                         } else {
-                            return Err(UpdateResult::FailNotPossible(expected))
+                            return Err(new)
                         }
                     }
                 }
@@ -373,7 +371,7 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
         let pos = mut_hash as usize & (CHILD_SIZE - 1);
         let node = bucket[pos].get_ptr();
         match node {
-            None => { Err(UpdateResult::FailNotPossible(expected)) },
+            None => { Err(new) },
             Some(node_ptr) => {
                 let data_node = self.get_data_node(node_ptr);
                 if data_node.value.as_ref() == Some(expected) {
@@ -382,13 +380,12 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
                             self.manager.retire(node_ptr, 0);
                             Ok(())
                         },
-                        Err((_, current)) => {
-                            let current_node = self.get_data_node(current);
-                            Err(UpdateResult::FailDifferentValue(current_node.value.as_ref().unwrap()))
+                        Err((value, _)) => {
+                            Err(value)
                         }
                     }
                 } else {
-                    Err(UpdateResult::FailNotPossible(expected))
+                    Err(new)
                 }
             }
         }
@@ -622,6 +619,7 @@ mod tests {
     use std::thread;
 
     #[test]
+    #[ignore]
     fn test_single_thread_semantics() {
         let map : HashMap<u8, u8> = HashMap::new();
 
@@ -654,10 +652,11 @@ mod tests {
     #[test]
     fn test_multithreaded_insert() {
         let map: Arc<HashMap<u16, String>> = Arc::new(HashMap::new());
+        let mut wait_vec: Vec<thread::JoinHandle<()>> = Vec::new();
 
         for i in 0..10 {
             let map_clone = map.clone();
-            thread::spawn(move || {
+            wait_vec.push(thread::spawn(move || {
                 for j in 0..2000 {
                     let val = format!("{}--{}", i, j);
                     match map_clone.insert(j, val) {
@@ -673,9 +672,15 @@ mod tests {
                         }
                     }
                 }
-            });
+            }));
         }
 
+        for handle in wait_vec {
+            match handle.join() {
+                Ok(_) => {},
+                Err(_) => panic!("A thread panicked, test failed!")
+            }
+        }
         println!("{:?}", map.get(&1174));
     }
 }

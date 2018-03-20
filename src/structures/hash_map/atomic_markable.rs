@@ -84,12 +84,13 @@ impl<K, V> Drop for AtomicMarkablePtr<K, V>
 where K: Send + Debug,
       V: Send + Debug
 {
+    // Can't use this right now because it will a new inserted node during map expansion
     fn drop(&mut self) {
         let mut ptr = self.ptr.load(Ordering::Relaxed) as *mut Node<K, V>;
         ptr = unmark(unmark_array_node(ptr));
         if !ptr.is_null() {
             unsafe {
-                Box::from_raw(ptr);
+                //Box::from_raw(ptr);
             }
         }
     }
