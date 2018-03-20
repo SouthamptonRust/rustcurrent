@@ -80,7 +80,9 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
                     array_node_ptr_marked
                 },
                 Err(current) => {
-                    // Remove the entry from the array node so it is not cleared by the destructor
+                    // Need to remove the pointer to the old element or this will delete a valid node
+                    let vec = HashMap::get_bucket(array_node_ptr);
+                    vec[new_pos].ptr().store(0, Ordering::Release); 
                     Box::from_raw(array_node_ptr);
                     current
                 }
@@ -757,14 +759,14 @@ mod tests {
             wait_vec.push(thread::spawn(move || {
                 for j in 0..2000 {
                     let val = format!("{}--{}", i, j);
-                    println!("inserting");
+                    //println!("inserting");
                     match map_clone.insert(j, val) {
                         Ok(()) => {},
                         Err((key, value)) => {
                             let expected = map_clone.get(&key);
                             match expected {
                                 Some(expected_value) => {
-                                    println!("updating");
+                                    //println!("updating");
                                     let _ = map_clone.update(&key, expected_value, value);
                                 },
                                 None => {}
