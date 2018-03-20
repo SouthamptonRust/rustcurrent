@@ -80,6 +80,7 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
                     array_node_ptr_marked
                 },
                 Err(current) => {
+                    // Remove the entry from the array node so it is not cleared by the destructor
                     Box::from_raw(array_node_ptr);
                     current
                 }
@@ -185,7 +186,12 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
         }
     }
 
-    pub fn get(&self, key: &K) -> Option<&V>
+    /// Standard get function returns a reference to an element of the map
+    /// It is up to the user to make sure this is not freed before they finish using it, but
+    /// the hazard pointers ensure that it is protected for this thread until the next hazard using map access
+    pub fn get<Q: ?Sized>(&self, key: &Q) -> Option<&V>
+    where K: Borrow<Q>,
+          Q: Eq + Hash + Send + Debug 
     {
         let hash = self.hash(key);
         let mut mut_hash = hash;
@@ -286,7 +292,10 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
 
     // Returns the current value if update fails because our expected is wrong
     // Otherwise returns the expected we passed in - this means we failed for a different reason
-    pub fn update<'a, 'b>(&'a self, key: &K, expected: &'b V, mut new: V) -> Result<(), V> {
+    pub fn update<'a, 'b, Q: ?Sized>(&'a self, key: &Q, expected: &'b V, mut new: V) -> Result<(), V>
+    where K: Borrow<Q>,
+          Q: Eq + Hash + Send + Debug 
+    {
         let hash = self.hash(key);
         let mut mut_hash = hash;
         let mut r = 0usize;
@@ -411,7 +420,10 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
         }
     }
 
-    pub fn remove(&self, key: &K, expected: &V) -> Option<V> {
+    pub fn remove<Q: ?Sized>(&self, key: &Q, expected: &V) -> Option<V>
+    where K: Borrow<Q>,
+          Q: Eq + Hash + Send + Debug  
+    {
         let hash = self.hash(key);
         let mut mut_hash = hash;
         let mut r = 0usize;
@@ -527,6 +539,87 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
         }
     }
 
+    fn get_clone<Q: ?Sized>(&self, key: &Q) -> Option<V> 
+    where K: Borrow<Q>,
+          Q: Eq + Hash + Send + Debug,
+          V: Clone
+    {
+        let hash = self.hash(key);
+        let mut mut_hash = hash;
+        let mut r = 0usize;
+        let mut bucket = &self.head;
+
+        while r < (KEY_SIZE - self.shift_step) {
+            let pos = mut_hash as usize & (bucket.len() - 1);
+            mut_hash >>= self.shift_step;
+            let mut node = bucket[pos].get_ptr();
+
+            match node {
+                None => { return None; }
+                Some(mut node_ptr) => {
+                    if atomic_markable::is_array_node(node_ptr) {
+                        bucket = HashMap::get_bucket(node_ptr);
+                    } else if atomic_markable::is_marked(node_ptr) {
+                        bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
+                    } else {
+                        self.manager.protect(atomic_markable::unmark(node_ptr), 0);
+                        // Check the hazard pointer
+                        if node != bucket[pos].get_ptr() {
+                            let mut fail_count = 0;
+                            while node != bucket[pos].get_ptr() {
+                                node = bucket[pos].get_ptr();
+                                match node {
+                                    None => { break; },
+                                    Some(new_ptr) => {
+                                        self.manager.protect(atomic_markable::unmark(atomic_markable::unmark_array_node(new_ptr)), 0);
+                                        fail_count += 1;
+                                        if fail_count > MAX_FAILURES {
+                                            bucket[pos].mark();
+                                            // Force a bucket update
+                                            bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
+                                            continue;
+                                        }
+                                        node_ptr = new_ptr;
+                                    }
+                                }            
+                            }
+                            // Hazard pointer should be fine now
+                            if atomic_markable::is_marked(node_ptr) {
+                               bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
+                                continue;
+                            } else if atomic_markable::is_array_node(node_ptr) {
+                                HashMap::get_bucket(node_ptr);
+                                continue;
+                            }
+                        }
+                        let data_node = self.get_data_node(node_ptr);
+                        if data_node.key == hash {
+                            return data_node.value.clone()
+                        } else {
+                            return None
+                        }
+                    }
+                }
+            }
+
+            r += self.shift_step;
+        }
+        // We should only be here if we got to the bottom
+        let pos = mut_hash as usize & (CHILD_SIZE - 1);
+        if let Some(node_ptr) = bucket[pos].get_ptr() {
+            unsafe {
+                match &*node_ptr {
+                    &Node::Array(_) => panic!("Unexpected array node!"),
+                    &Node::Data(ref data_node) => {
+                        return data_node.value.clone()
+                    }
+                }
+            }
+        } else {
+            return None
+        }
+    }
+
     fn try_remove(&self, position: &AtomicMarkablePtr<K, V>, old: *mut Node<K, V>) -> Result<(), *mut Node<K, V>> {
         match position.compare_exchange(old, ptr::null_mut()) {
             Ok(_) => Ok(()),
@@ -619,7 +712,6 @@ mod tests {
     use std::thread;
 
     #[test]
-    #[ignore]
     fn test_single_thread_semantics() {
         let map : HashMap<u8, u8> = HashMap::new();
 
@@ -650,6 +742,15 @@ mod tests {
     }
 
     #[test]
+    fn test_borrow_string_map() {
+        let map: HashMap<String, u16> = HashMap::new();
+        let _ = map.insert("hello".to_owned(), 8);
+        assert_eq!(map.get_clone("hello"), Some(8));
+        assert_eq!(map.get("hello"), Some(&8));
+        assert_eq!(map.remove("hello", &8), Some(8));
+    }
+
+    #[test]
     fn test_multithreaded_insert() {
         let map: Arc<HashMap<u16, String>> = Arc::new(HashMap::new());
         let mut wait_vec: Vec<thread::JoinHandle<()>> = Vec::new();
@@ -676,6 +777,7 @@ mod tests {
         }
 
         for handle in wait_vec {
+            println!("joined: {:?}", handle);
             match handle.join() {
                 Ok(_) => {},
                 Err(_) => panic!("A thread panicked, test failed!")
