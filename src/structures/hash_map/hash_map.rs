@@ -91,7 +91,7 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
     /// Attempt to insert into the HashMap
     /// Returns Ok on success and Error on failure containing the attempted
     /// insert data
-    pub fn insert(&self, key: K, mut value: V) -> Result<(), (K, V)> {
+    pub fn insert(&self, key: K, value: V) -> Result<(), (K, V)> {
         let hash = self.hash(&key);
         let mut mut_hash = hash;
         let mut bucket = &self.head;
