@@ -109,37 +109,34 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
                 }
                 match node {
                     None => {
-                        value = match self.try_insert(&bucket[pos], ptr::null_mut(), hash, value) {
+                        match self.try_insert(&bucket[pos], ptr::null_mut(), hash, value) {
                             Ok(_) => { return Ok(()) },
-                            Err(old) => old
-                        };
+                            Err(old) => { return Err((key, old)) }
+                        }
                     },
-                    Some(mut node_ptr) => {
+                    Some(node_ptr) => {
                         if atomic_markable::is_marked(node_ptr) {
-                            node = Some(self.expand_map(bucket, pos, r));
-                            node_ptr = node.unwrap();
+                            // Check that doing this never breaks, ie expand_map returns a data node
+                            bucket = HashMap::get_bucket(self.expand_map(bucket, pos, r));
+                            break;
                         }
                         if atomic_markable::is_array_node(node_ptr) {
-                            node_ptr = atomic_markable::unmark_array_node(node_ptr);
-                            unsafe {
-                                // This dereference should be safe because array nodes cannot be removed
-                                match &*node_ptr {
-                                    &Node::Data(_) => panic!("Unexpected data node"),
-                                    &Node::Array(ref array_node) => {
-                                        bucket = &array_node.array;
-                                        break;
-                                    }
-                                }
-                            }
+                            bucket = HashMap::get_bucket(node_ptr);
+                            break;
                         } else {
                             self.manager.protect(node_ptr, 0);
                             let node2 = bucket[pos].get_ptr();
-                            if node2.is_none() || !ptr::eq(node2.unwrap(), node_ptr) {
+                            if node2 != node {
                                 node = node2;
                                 fail_count += 1;
                                 continue;
                             } else {
+                                // Hazard pointer should be safe
                                 unsafe {
+                                    let data_node = self.get_data_node(node_ptr);
+                                    if data_node.key == hash {
+                                        return Err((key, value))
+                                    }
                                     match &*node_ptr {
                                         &Node::Array(_) => panic!("Unexpected array node!,{:b} -> {:?}", node_ptr as usize, value),
                                         &Node::Data(ref data_node) => {
@@ -273,7 +270,7 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
         let data_node: DataNode<K, V> = DataNode::new(key, value);
         let data_node_ptr = Box::into_raw(Box::new(Node::Data(data_node)));
 
-        return match position.compare_exchange_weak(old, data_node_ptr) {
+        return match position.compare_exchange(old, data_node_ptr) {
             Ok(_) => Ok(()),
             Err(_) => {
                 unsafe {
@@ -760,12 +757,14 @@ mod tests {
             wait_vec.push(thread::spawn(move || {
                 for j in 0..2000 {
                     let val = format!("{}--{}", i, j);
+                    println!("inserting");
                     match map_clone.insert(j, val) {
                         Ok(()) => {},
                         Err((key, value)) => {
                             let expected = map_clone.get(&key);
                             match expected {
                                 Some(expected_value) => {
+                                    println!("updating");
                                     let _ = map_clone.update(&key, expected_value, value);
                                 },
                                 None => {}
