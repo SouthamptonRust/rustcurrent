@@ -8,6 +8,39 @@ use std::fmt;
 use std::ptr;
 use std::mem;
 
+/// A Hazard Pointer based memory manager for use in lock-free data structures.
+///
+/// This is an implementation of a Hazard Pointer Based Reclamation Manager, based on 
+/// the papers [Hazard Pointers: Safe Memory Reclamation for Lock-Free Objects]
+/// (https://dl.acm.org/citation.cfm?id=987595) and [Safe Memory Reclamation for Dynamic
+/// Lock-Free Objects Using Atomic Reads and Writes](https://dl.acm.org/citation.cfm?id=571829).
+///
+/// When a thread needs to read a memory address which could potentially be freed by
+/// another thread, it protects it using this manager's `protect` function. This ensures
+/// that it cannot be deleted, which would cause errors or inconsistency. 
+///
+/// When a thread wishes to free memory, it calls the `retire` function, which adds the
+/// address to its free list. Once the size of a thread's free list exceeds a certain
+/// number, the thread becomes responsible for garbage collection, scanning through the 
+/// hazard pointers of all threads. If an address is not protected by any hazard pointers, 
+/// it can be freed, otherwise it is kept in the free list until the next collection.
+///
+/// If a thread is exiting the structure for good, it can call the `unprotect` function
+/// to clear one of its hazard pointers. This stops the resources it was protecting
+/// from never being freed.
+///
+/// Since deletion is performed by each thread individually, it is impossible for a panicking
+/// thread to lock up the entire memory manager. This guarantees that even if a thread panics,
+/// all resources will be freed other than those in the free list of that thread,
+/// and those protected by its hazard pointers.
+///
+/// Hazard Pointers are stored in a thread-local data structure and pointed to from a global
+/// linked list. They are initialised the first time a thread tries to protect a record. The
+/// optimisations provided by the `thread_local` crate ensure that a thread's access to its own
+/// hazard pointers is of the order of nanoseconds, so there should be no performance hit. 
+///
+/// Records are freed by reclaiming `Box` ownership, so the manager should be used with raw pointers
+/// created through the `Box::into_raw()` function.
 pub struct HPBRManager<T: Send> {
     thread_info: CachedThreadLocal<UnsafeCell<ThreadLocalInfo<T>>>,
     head: AtomicPtr<HazardPointer<T>>,
@@ -34,6 +67,12 @@ impl<'a, T: Send + Debug + 'a> Debug for HPBRManager<T> {
 }
 
 impl<'a, T: Send> HPBRManager<T> {
+    /// Create a new HPBRManager with a maximum number of records to keep in the free list
+    /// and the number of hazard pointers to create for each thread.
+    /// # Examples
+    /// ```
+    /// let manager: HBPRManager<*mut u8> = HPBRManager::new(100, 1);
+    /// ``` 
     pub fn new(max_retired: usize, num_hp_per_thread: usize) -> Self {
         HPBRManager {
             thread_info: CachedThreadLocal::new(),
@@ -66,6 +105,19 @@ impl<'a, T: Send> HPBRManager<T> {
         new_hp_ptr
     }
 
+    /// Retire the given record, which was protected inside the given hazard pointer. If the 
+    /// number of records in the free list is bigger than the maximum allowed, this call will trigger
+    /// garbage collection for this thread.
+    /// # Unsafe
+    /// Make sure the record pointer is a valid address that has not already been freed.
+    /// # Examples
+    /// ```
+    /// let manager: HBPRManager<*mut u8> = HPBRManager::new(100, 1);
+    /// let ptr = Box::into_raw(Box::new(8u8));
+    /// manager.protect(ptr, 0);
+    /// // Operate on ptr...
+    /// manager.retire(ptr, 0); // Add the resource to this thread's free list
+    /// ```
     pub fn retire(&self, record: *mut T, hazard_num: usize) {
         unsafe {
             let thread_info_mut = self.get_mut_thread_info();
@@ -79,6 +131,21 @@ impl<'a, T: Send> HPBRManager<T> {
         }
     }
 
+    /// Protect the given record with in the given hazard pointer. The caller should always check after protection
+    /// that the proteced record has not changed before operating on it, to make sure the protected record has not
+    /// already been removed and possibly freed.
+    /// # Unsafe
+    /// Make sure the record pointer is a valid address that has not already been freed.
+    /// # Examples
+    /// ```
+    /// let hazard = self.head_node;
+    /// manager.protect(hazard, 0);         // Store in the first hazard pointer
+    /// while hazard != self.head_node {    // Ensure we protect a non-freed address
+    ///     hazard = self.head_node;
+    ///     manager.protect(hazard, 0);
+    /// }
+    /// // Now we can operate on hazard without any worries!
+    /// ```
     pub fn protect(&self, record: *mut T, hazard_num: usize) {
         unsafe {
             atomic::fence(Ordering::Release);
@@ -87,6 +154,18 @@ impl<'a, T: Send> HPBRManager<T> {
         }
     }
 
+    /// Set the given hazard pointer to null. This ensures that the record will not be
+    /// prevented from being freed by this hazard pointer and should be used if a thread exits
+    /// a data structure for good.
+    /// # Examples
+    /// ```
+    /// let manager: HBPRManager<*mut u8> = HPBRManager::new(100, 1);
+    /// let ptr = Box::into_raw(Box::new(8u8));
+    /// manager.protect(ptr, 0);
+    /// // Operate on ptr...
+    /// manager.retire(ptr, 0); // Will not allow ptr to be freed
+    /// manager.unprotect(0);   // ptr can now be freed
+    /// ```
     pub fn unprotect(&self, hazard_num: usize) {
         unsafe {
             let thread_info_mut = self.get_mut_thread_info();
@@ -94,10 +173,24 @@ impl<'a, T: Send> HPBRManager<T> {
         }
     }
 
-    /// Should only be used in the drop function of a concurrent structure to check that a record
-    /// is not still in the hazard pointer deletion list of the manager. This will be quite slow.
-    /// Need to think of possible ways to improve this
-    pub unsafe fn check_if_hazard(&mut self, record: *mut T) -> bool {
+    /// This function is provided for use in data structure destructors. If somehow
+    /// there is data in both a retired list and still accessible from a data structure as
+    /// `drop` is called, it is possible to cause a double free, as an HPBRManager will free
+    /// all resources in its hazard pointers and free lists when it is dropped. 
+    /// This function is slow, unsafe,
+    /// and should not be used to implement any kind of logic.
+    /// # Unsafe
+    /// The pointer provided must be a valid one.
+    /// # Examples
+    /// ```
+    /// let manager: HBPRManager<*mut u8> = HPBRManager::new(100, 1);
+    /// let ptr = Box::into_raw(Box::new(8u8));
+    /// manager.protect(ptr, 0);
+    /// // Operate on ptr...
+    /// manager.retire(ptr, 0); // Add the resource to this thread's free list
+    /// assert!(manager.check_in_free_list(ptr)); // true!
+    /// ```
+    pub unsafe fn check_in_free_list(&mut self, record: *mut T) -> bool {
         for local in self.thread_info.iter_mut() {
             let info = &*local.get();
             if info.retired_list.contains(&record) {return true}
@@ -140,7 +233,6 @@ impl<'a, T: Send> HPBRManager<T> {
 
     fn free(garbage: *mut T) {
         // Letting this box go out of scope should call Drop on the garbage
-        // Seems to work after very basic tests
         unsafe {
             Box::from_raw(garbage);
         }

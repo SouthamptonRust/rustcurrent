@@ -160,7 +160,7 @@ impl<T: Send> Drop for EliminationLayer<T> {
             let operations = &mut *self.operations.get();
             for (_, ptr) in operations.into_iter() {
                 let raw_ptr = ptr.load(Ordering::Relaxed);
-                if !ptr::eq(raw_ptr, ptr::null()) && !self.manager.check_if_hazard(raw_ptr) {
+                if !ptr::eq(raw_ptr, ptr::null()) && !self.manager.check_in_free_list(raw_ptr) {
                     Box::from_raw(raw_ptr);
                 }
             }
