@@ -14,6 +14,33 @@ const CHILD_SIZE: usize = 16;
 const KEY_SIZE: usize = 64;
 const MAX_FAILURES: u64 = 10;
 
+/// This hashmap is an implementation of the Wait-Free HashMap presented in the paper [A Wait-Free HashMap]
+/// (https://dl.acm.org/citation.cfm?id=3079519) with a few tweaks to make it usable in Rust. The general structure
+/// is unchanged, and follows the tree structure laid out in the paper.
+///
+/// The head of the hashmap is an array of HEAD_SIZE elements, each one can either point to a node 
+/// containing data, or a node containing an array of CHILD_SIZE elements, where CHILD_SIZE is smaller
+/// than HEAD_SIZE. By default, this implementation uses a HEAD_SIZE of 256 and a CHILD_SIZE of 16.
+/// Once a slot contains an array node, it can never be changed, which allows for a number of memory
+/// management guarantees.
+///
+/// Keys are not currently stored in the hashmap, only values and the corresponding hash. 
+/// This can easily be changed if needed. Finding a value in the map follows this process:
+///
+/// * The hash is computed from the key. This hash will always be a 64-bit integer, and needs to be unique. 
+/// If two keys hash to the same value, only one can be inserted. This should not be a problem in most cases.
+/// * The first `n` bits of the key are used to index into the head array through bitwise AND. 
+/// Here, `n` is defined as `log2(HEAD_SIZE)`.
+/// * If we find a data node, we have found the value, if we find an array node, then we 
+/// shift the hash 'r' bits to the right, where r is `log2(CHILD_SIZE)`. We can use 
+/// this to index into the new array, and continue.
+/// * If we reach a null spot at any point, then the element is not in the array.
+/// * Once we reach the bottom, the full key will have been used, ensuring correct hashing given unique hashing.
+///
+/// The tree structure is bounded by HEAD_SIZE and CHILD_SIZE, such that 
+/// `max_depth = (hash_size - log2(HEAD_SIZE)) / log2(CHILD_SIZE)`. In this case, 
+/// that means the maximum depth is 14. This is used to justify the implementation of 
+/// recursive destructors: they should not be able to overflow the stack.
 pub struct HashMap<K, V> 
 where K: Send,
       V: Send 
@@ -26,7 +53,11 @@ where K: Send,
 }
 
 impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
-    /// Create a new Wait-Free HashMap with the default head size
+    /// Create a new Wait-Free HashMap with the default head and child sizes.
+    /// # Examples
+    /// ```
+    /// let map: HashMap<String, u8> = HashMap::new(); // Creates a new map of String to u8
+    /// ```
     pub fn new() -> Self {
         let mut head: Vec<AtomicMarkablePtr<K, V>> = Vec::with_capacity(HEAD_SIZE);
         for _ in 0..HEAD_SIZE {
@@ -42,6 +73,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
         }   
     }
 
+    /// Hash a single element with the default Rust hasher initialised to a random state.
     fn hash<Q: ?Sized>(&self, key: &Q) -> u64 
     where K: Borrow<Q>,
           Q: Eq + Hash + Send 
@@ -51,7 +83,8 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
         hasher.finish()
     }
 
-    /// Attempt to add an array node level to the current position
+    /// Attempt to set the current MarkablePtr to point to an ArrayNode. This function adds the old DataNode
+    /// at this position to the new ArrayNode.
     fn expand_map(&self, bucket: &Vec<AtomicMarkablePtr<K, V>>, pos: usize, shift_amount: usize) -> *mut Node<K, V> {
         // We know this node must exist
         let node = atomic_markable::unmark(bucket[pos].get_ptr().unwrap());
@@ -90,9 +123,18 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
         }
     }
 
-    /// Attempt to insert into the HashMap
-    /// Returns Ok on success and Error on failure containing the attempted
-    /// insert data
+    /// Attempt to insert the given value with the given key into the HashMap.
+    /// # Panics
+    /// If the internal structure of the map becomes inconsistent, this will panic.
+    /// # Errors
+    /// If the the new key/value pair cannot be inserted, either because of contention
+    /// or the value already being in the map, an Err will be returned containing the attempted
+    /// insertion values.
+    /// # Examples:
+    /// ```
+    /// let map: HashMap<String, u8> = HashMap::new();
+    /// map.insert("hello".to_owned(), 8);
+    /// ```
     pub fn insert(&self, key: K, value: V) -> Result<(), (K, V)> {
         let hash = self.hash(&key);
         let mut mut_hash = hash;
@@ -185,9 +227,20 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
         }
     }
 
-    /// Standard get function returns a reference to an element of the map
-    /// It is up to the user to make sure this is not freed before they finish using it, but
-    /// the hazard pointers ensure that it is protected for this thread until the next hazard using map access
+    /// Retrieve a **reference** to the element in the HashMap with the given key. Returns None if
+    /// the element is not inside the map. It is 
+    /// important to note that this is only a reference because if the data is removed by another thread it
+    /// could be deleted. This method guarantees that the reference will be protected for this thread until
+    /// the next map method is called, as it will be stored in a hazard pointer. If the data needs to persist
+    /// for longer than that, it is recommended to use `get_clone`.
+    /// # Panics
+    /// If the internal state of the HashMap becomes inconsistent, this method will panic.
+    /// # Examples
+    /// ```
+    /// let map: HashMap<String, u8> = HashMap::new();
+    /// map.insert("hello".to_owned(), 8);
+    /// assert_eq!(map.get("hello"), Some(&8));
+    /// ``` 
     pub fn get<Q: ?Sized>(&self, key: &Q) -> Option<&V>
     where K: Borrow<Q>,
           Q: Eq + Hash + Send  
@@ -289,8 +342,25 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
         }
     }
 
-    // Returns the current value if update fails because our expected is wrong
-    // Otherwise returns the expected we passed in - this means we failed for a different reason
+    /// Attempt to update a value in the map with the given key and expected value. The 
+    /// expected value is needed so that a newer element cannot be overwrittn with an old one
+    /// by another thread.
+    /// # Panics
+    /// This method will panic if the internal state of the HashMap becomes inconsistent.
+    /// # Errors
+    /// This method returns Err containing the attempted insertion value on the following conditions:
+    /// * The CAS fails.
+    /// * The expected value does not match the actual one.
+    /// * The key is not in the map.
+    /// # Examples
+    /// ```
+    /// let map: HashMap<String, u8> = HashMap::new();
+    /// map.insert("hello".to_owned(), 8);
+    /// assert_eq!(map.get("hello"), Some(&8));
+    /// map.update("hello", &8, 24);
+    /// assert_eq!(map.get("hello"), Some(&24));
+    /// assert_eq!(map.update("rust", &7, 7), Err(7));
+    /// ```
     pub fn update<'a, 'b, Q: ?Sized>(&'a self, key: &Q, expected: &'b V, mut new: V) -> Result<(), V>
     where K: Borrow<Q>,
           Q: Eq + Hash + Send  
@@ -419,6 +489,18 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
         }
     }
 
+    /// Attempt to remove the element with the given key and expected value from the HashMap.
+    /// Returns the removed value on success, and None on failure.
+    /// # Panics
+    /// This method panics if the internal state of the HashMap becomes inconsistent.
+    /// # Examples
+    /// ```
+    /// let map: HashMap<String, u8> = HashMap::new();
+    /// map.insert("hello".to_owned(), 8);
+    /// assert_eq!(map.get("hello"), Some(&8));
+    /// assert_eq!(map.remove("hello", &8), Some(8));
+    /// assert_eq!(map.get("hello"), None);
+    /// ```
     pub fn remove<Q: ?Sized>(&self, key: &Q, expected: &V) -> Option<V>
     where K: Borrow<Q>,
           Q: Eq + Hash + Send   
@@ -538,7 +620,18 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
         }
     }
 
-    fn get_clone<Q: ?Sized>(&self, key: &Q) -> Option<V> 
+    /// Retrieves a clone of the element with the given key, where the clone is created using
+    /// the method defined on the `Clone` trait. This is safer than using the reference get,
+    /// and is essential if values will need to live outside of the map.
+    /// # Panics
+    /// This method will panic if the internal state of the HashMap becomes inconsistent.
+    /// # Examples
+    /// ```
+    /// let map: HashMap<String, u8> = HashMap::new();
+    /// map.insert("hello".to_owned(), 8);
+    /// assert_eq!(map.get_clone("hello"), Some(8));
+    /// ``` 
+    pub fn get_clone<Q: ?Sized>(&self, key: &Q) -> Option<V> 
     where K: Borrow<Q>,
           Q: Eq + Hash + Send,
           V: Clone
