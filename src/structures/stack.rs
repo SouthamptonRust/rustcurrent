@@ -9,6 +9,26 @@ use rand;
 use memory::HPBRManager;
 use std::mem;
 
+/// A lock-free stack with optional elimination backoff.
+///
+/// This is an implementation of a [Treiber Stack](http://domino.research.ibm.com/library/cyberdig.nsf/papers/58319A2ED2B1078985257003004617EF/$File/rj5118.pdf)
+/// with an optional elimination backoff layer as described by [Colvin and Groves](http://ieeexplore.ieee.org/document/4343950/).
+/// If the elimination layer is turned on, then when the stack is heavily contended, operations will
+/// attempt to match each other to exchange values without touching the stack at all, in a attempt to
+/// increase scalability.
+/// 
+/// The stack can be used in a multithreaded context by wrapping it in an Arc.
+/// # Usage
+/// ```
+/// let stack: Arc<Stack<u8>> = Arc::new(Stack::new(true));
+/// for _ in 0..8 {
+///     let stack_clone = stack.clone();
+///     thread::spawn(move || {
+///         stack.push(8);
+///         stack.pop();
+///     });
+/// }
+/// ```
 #[derive(Debug)]
 pub struct Stack<T: Send> {
     head: AtomicPtr<Node<T>>,
@@ -18,21 +38,33 @@ pub struct Stack<T: Send> {
 }
 
 #[derive(Debug)]
-pub struct Node<T> {
+struct Node<T> {
     data: Option<T>,
     next: AtomicPtr<Node<T>>
 }
 
 impl<T: Send> Stack<T> {
+    /// Create a new stack, with or without elimination layer.
+    /// # Examples
+    /// ```
+    /// let stack: Stack<u8> = Stack::new(true);
+    /// ```
     pub fn new(elimination_on: bool) -> Stack<T> {
         Stack {
             head: AtomicPtr::default(),
             elimination: EliminationLayer::new(40, 5),
-            manager: HPBRManager::new(3000, 1),
+            manager: HPBRManager::new(200, 1),
             elimination_on
         }
     }
 
+    /// Push a piece of data onto the stack. This operation blocks until success,
+    /// which is guaranteed by the lock-free data structure.
+    /// # Examples
+    /// ```
+    /// let stack: Stack<String> = Stack::new(true);
+    /// stack.push("hello".to_owned());
+    /// ```
     pub fn push(&self, val: T) {
         let mut node = Box::new(Node::new(val));
         loop {
@@ -66,6 +98,14 @@ impl<T: Send> Stack<T> {
         }
     }
 
+    /// Pop a piece of data from the top of the stack, or return None if the stack
+    /// is empty. Blocks until success.
+    /// # Examples
+    /// ```
+    /// let stack: Stack<String> = Stack::new(true);
+    /// stack.push("hello".to_owned());
+    /// assert_eq!(stack.pop(), "hello".to_owned()); 
+    /// ```
     pub fn pop(&self) -> Option<T> {
         loop {
             if let Ok(val) = self.try_pop() {

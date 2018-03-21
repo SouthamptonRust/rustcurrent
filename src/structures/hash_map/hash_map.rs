@@ -14,6 +14,8 @@ const CHILD_SIZE: usize = 16;
 const KEY_SIZE: usize = 64;
 const MAX_FAILURES: u64 = 10;
 
+/// A wait-free HashMap based on a tree structure.
+///
 /// This hashmap is an implementation of the Wait-Free HashMap presented in the paper [A Wait-Free HashMap]
 /// (https://dl.acm.org/citation.cfm?id=3079519) with a few tweaks to make it usable in Rust. The general structure
 /// is unchanged, and follows the tree structure laid out in the paper.
