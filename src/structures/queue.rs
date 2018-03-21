@@ -2,6 +2,11 @@ use memory::HPBRManager;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::ptr;
 
+/// A lock-free Michael-Scott queue.
+///
+/// This queue is an implementation of that described in [Simple, Fast, and Practical
+/// Non-blocking and Blocking Concurrent Queue Algorithms](https://dl.acm.org/citation.cfm?id=248106). 
+/// It is implemented as a linked-list of nodes.
 #[derive(Debug)]
 pub struct Queue<T: Send> {
     head: AtomicPtr<Node<T>>,
@@ -10,12 +15,17 @@ pub struct Queue<T: Send> {
 }
 
 #[derive(Debug)]
-pub struct Node<T: Send> {
+struct Node<T: Send> {
     next: AtomicPtr<Node<T>>,
     value: Option<T>
 }
 
 impl<T: Send> Queue<T> {
+    /// Create a new Queue.
+    /// # Examples
+    /// ```
+    /// let queue: Queue<String> = Queue::new();
+    /// ```
     pub fn new() -> Self {
         let dummy_node = Box::into_raw(Box::new(Node::new_dummy_node()));
         Queue {
@@ -25,6 +35,12 @@ impl<T: Send> Queue<T> {
         }
     }
 
+    /// Add a new element to the back of the queue.
+    /// # Examples
+    /// ```
+    /// let queue: Queue<String> = Queue::new();
+    /// queue.enqueue("hello".to_owned());
+    /// ```
     pub fn enqueue(&self, val: T) {
         let mut node = Box::new(Node::new(val));
         loop {
@@ -70,6 +86,13 @@ impl<T: Send> Queue<T> {
         }
     }
 
+    /// Take an element from the front of the queue, or return None if the queue is empty.
+    /// # Examples
+    /// ```
+    /// let queue: Queue<String> = Queue::new();
+    /// queue.enqueue("hello".to_owned());
+    /// assert_eq!(queue.dequeue(), Some("hello".to_owned()));
+    /// ```
     pub fn dequeue(&self) -> Option<T> {
         loop {
             if let Ok(val) = self.try_dequeue() {
