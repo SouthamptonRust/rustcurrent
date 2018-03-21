@@ -7,14 +7,14 @@ use std::mem;
 use rand;
 use rand::Rng;
 
-pub struct SegQueue<T: Send + Debug> {
+pub struct SegQueue<T: Send> {
     head: AtomicPtr<Node<T>>,
     tail: AtomicPtr<Node<T>>,
     manager: HPBRManager<Node<T>>,
     k: usize
 }
 
-impl<T: Send + Debug> SegQueue<T> {
+impl<T: Send> SegQueue<T> {
     pub fn new(k: usize) -> Self {
         let init_node: *mut Node<T> = Box::into_raw(Box::new(Node::new(k)));
         SegQueue {
@@ -270,7 +270,7 @@ impl<T: Send + Debug> SegQueue<T> {
     }
 }
 
-impl<T: Send + Debug> Drop for SegQueue<T> {
+impl<T: Send> Drop for SegQueue<T> {
     fn drop(&mut self) {
         let mut current = self.head.load(Ordering::Relaxed);
         while !current.is_null() {
@@ -298,13 +298,13 @@ impl<T: Send + Debug> Debug for SegQueue<T> {
     }
 }
 
-struct Node<T: Send + Debug> {
+struct Node<T: Send> {
     data: Vec<AtomicPtr<Option<T>>>,
     next: AtomicPtr<Node<T>>,
     deleted: bool
 }   
 
-impl<T: Send + Debug> Node<T> {
+impl<T: Send> Node<T> {
     fn new(k: usize) -> Self {
         let mut data = Vec::new();
         for _ in 0..k {
@@ -334,7 +334,7 @@ impl<T: Send + Debug> Debug for Node<T> {
     }
 }
 
-impl<T: Send + Debug> Drop for Node<T> {
+impl<T: Send> Drop for Node<T> {
     fn drop(&mut self) {
         let vec = mem::replace(&mut self.data, Vec::new());
         for a_ptr in vec {

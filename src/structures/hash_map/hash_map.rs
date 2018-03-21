@@ -15,8 +15,8 @@ const KEY_SIZE: usize = 64;
 const MAX_FAILURES: u64 = 10;
 
 pub struct HashMap<K, V> 
-where K: Send + Debug,
-      V: Send + Debug
+where K: Send ,
+      V: Send 
 {
     head: Vec<AtomicMarkablePtr<K, V>>,
     hasher: RandomState,
@@ -25,7 +25,7 @@ where K: Send + Debug,
     manager: HPBRManager<Node<K, V>>
 }
 
-impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
+impl<K: Eq + Hash  + Send, V: Send  + Eq> HashMap<K, V> {
     /// Create a new Wait-Free HashMap with the default head size
     pub fn new() -> Self {
         let mut head: Vec<AtomicMarkablePtr<K, V>> = Vec::with_capacity(HEAD_SIZE);
@@ -44,7 +44,7 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
 
     fn hash<Q: ?Sized>(&self, key: &Q) -> u64 
     where K: Borrow<Q>,
-          Q: Eq + Hash + Send + Debug
+          Q: Eq + Hash + Send 
     {
         let mut hasher = self.hasher.build_hasher();
         key.hash(&mut hasher);
@@ -140,7 +140,7 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
                                         return Err((key, value))
                                     }
                                     match &*node_ptr {
-                                        &Node::Array(_) => panic!("Unexpected array node!,{:b} -> {:?}", node_ptr as usize, value),
+                                        &Node::Array(_) => panic!("Unexpected array node!,{:b}", node_ptr as usize),
                                         &Node::Data(ref data_node) => {
                                             if data_node.key == hash {
                                                 return Err((key, value))
@@ -190,7 +190,7 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
     /// the hazard pointers ensure that it is protected for this thread until the next hazard using map access
     pub fn get<Q: ?Sized>(&self, key: &Q) -> Option<&V>
     where K: Borrow<Q>,
-          Q: Eq + Hash + Send + Debug 
+          Q: Eq + Hash + Send  
     {
         let hash = self.hash(key);
         let mut mut_hash = hash;
@@ -293,7 +293,7 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
     // Otherwise returns the expected we passed in - this means we failed for a different reason
     pub fn update<'a, 'b, Q: ?Sized>(&'a self, key: &Q, expected: &'b V, mut new: V) -> Result<(), V>
     where K: Borrow<Q>,
-          Q: Eq + Hash + Send + Debug 
+          Q: Eq + Hash + Send  
     {
         let hash = self.hash(key);
         let mut mut_hash = hash;
@@ -421,7 +421,7 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
 
     pub fn remove<Q: ?Sized>(&self, key: &Q, expected: &V) -> Option<V>
     where K: Borrow<Q>,
-          Q: Eq + Hash + Send + Debug  
+          Q: Eq + Hash + Send   
     {
         let hash = self.hash(key);
         let mut mut_hash = hash;
@@ -540,7 +540,7 @@ impl<K: Eq + Hash + Debug + Send, V: Send + Debug + Eq> HashMap<K, V> {
 
     fn get_clone<Q: ?Sized>(&self, key: &Q) -> Option<V> 
     where K: Borrow<Q>,
-          Q: Eq + Hash + Send + Debug,
+          Q: Eq + Hash + Send ,
           V: Clone
     {
         let hash = self.hash(key);
@@ -680,8 +680,8 @@ where K: Eq + Hash + Send + Debug,
 }
 
 impl<K, V> Default for HashMap<K, V>
-where K: Eq + Hash + Send + Debug,
-      V: Eq + Send + Debug
+where K: Eq + Hash + Send ,
+      V: Eq + Send 
 {
     fn default() -> Self {
         HashMap::new()

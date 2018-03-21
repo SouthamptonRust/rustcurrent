@@ -8,7 +8,7 @@ use std::fmt;
 use std::ptr;
 use std::mem;
 
-pub struct HPBRManager<T: Send + Debug> {
+pub struct HPBRManager<T: Send> {
     thread_info: CachedThreadLocal<UnsafeCell<ThreadLocalInfo<T>>>,
     head: AtomicPtr<HazardPointer<T>>,
     max_retired: usize,
@@ -33,7 +33,7 @@ impl<'a, T: Send + Debug + 'a> Debug for HPBRManager<T> {
     }
 }
 
-impl<'a, T: Send + Debug> HPBRManager<T> {
+impl<'a, T: Send> HPBRManager<T> {
     pub fn new(max_retired: usize, num_hp_per_thread: usize) -> Self {
         HPBRManager {
             thread_info: CachedThreadLocal::new(),
@@ -165,19 +165,19 @@ impl<'a, T: Send + Debug> HPBRManager<T> {
     }
 }
 
-struct HazardPointer<T: Send + Debug> {
+struct HazardPointer<T: Send> {
     protected: Option<*mut T>,
     next: AtomicPtr<HazardPointer<T>>,
     active: AtomicBool
 }
 
-impl<T: Send + Debug> Drop for HazardPointer<T> {
+impl<T: Send> Drop for HazardPointer<T> {
     fn drop(&mut self) {
         println!("Dropping hazard pointer");
     }
 }
 
-impl<T: Send + Debug> HazardPointer<T> {
+impl<T: Send> HazardPointer<T> {
     fn new() -> Self {
         HazardPointer {
             protected: None,
@@ -199,7 +199,7 @@ impl<T: Send + Debug> HazardPointer<T> {
     }
 }
 
-impl<T: Debug + Send> Debug for HazardPointer<T> {
+impl<T: Send + Debug> Debug for HazardPointer<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let val_string = match self.protected {
             None => format!("protected: None"),
@@ -215,16 +215,16 @@ impl<T: Debug + Send> Debug for HazardPointer<T> {
     }
 }
 
-unsafe impl<T: Debug + Send> Send for ThreadLocalInfo<T> {}
+unsafe impl<T: Send> Send for ThreadLocalInfo<T> {}
 
 #[derive(Debug)]
-struct ThreadLocalInfo<T: Send + Debug> {
+struct ThreadLocalInfo<T: Send> {
     local_hazards: Vec<*mut HazardPointer<T>>,
     retired_list: Box<VecDeque<*mut T>>,
     retired_number: usize
 }
 
-impl<T: Send + Debug> ThreadLocalInfo<T> {
+impl<T: Send> ThreadLocalInfo<T> {
     fn new(starting_hazards: Vec<*mut HazardPointer<T>>) -> Self {
         ThreadLocalInfo {
             local_hazards: starting_hazards,
@@ -238,7 +238,7 @@ impl<T: Send + Debug> ThreadLocalInfo<T> {
     }
 }
 
-impl<T: Send + Debug> Drop for ThreadLocalInfo<T> {
+impl<T: Send> Drop for ThreadLocalInfo<T> {
     fn drop(&mut self) {
         // Free all nodes left over at program end
         for garbage in self.retired_list.drain(..) {

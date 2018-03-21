@@ -1,6 +1,5 @@
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::ptr;
-use std::fmt::Debug;
 use std::collections::HashMap;
 use std::thread;
 use std::time::Duration;
@@ -11,7 +10,7 @@ use memory::HPBRManager;
 use std::mem;
 
 #[derive(Debug)]
-pub struct Stack<T: Send + Debug> {
+pub struct Stack<T: Send> {
     head: AtomicPtr<Node<T>>,
     elimination: EliminationLayer<T>,
     manager: HPBRManager<Node<T>>,
@@ -19,12 +18,12 @@ pub struct Stack<T: Send + Debug> {
 }
 
 #[derive(Debug)]
-pub struct Node<T: Debug> {
+pub struct Node<T> {
     data: Option<T>,
     next: AtomicPtr<Node<T>>
 }
 
-impl<T: Send + Debug> Stack<T> {
+impl<T: Send> Stack<T> {
     pub fn new(elimination_on: bool) -> Stack<T> {
         Stack {
             head: AtomicPtr::default(),
@@ -49,7 +48,6 @@ impl<T: Send + Debug> Stack<T> {
                 };
                 node.data = data;
             }
-            println!("Fail node: {:?} for thread {:?}", node, thread::current().id());
         }
     }
 
@@ -75,7 +73,6 @@ impl<T: Send + Debug> Stack<T> {
             }
             if self.elimination_on {
                 if let Ok(val) = self.elimination.try_eliminate(OpType::Pop, None) {
-                    println!("{:?}", val);
                     return val
                 }
             }
@@ -106,7 +103,7 @@ impl<T: Send + Debug> Stack<T> {
     }
 }
 
-impl<T: Debug + Send> Drop for Stack<T> {
+impl<T: Send> Drop for Stack<T> {
     // We can assume that when drop is called, the program holds no more references to the stack
     // This means we can walk the stack, freeing all the data within
     fn drop(&mut self) {
@@ -121,7 +118,7 @@ impl<T: Debug + Send> Drop for Stack<T> {
     }
 }
 
-impl<T: Debug> Node<T> {
+impl<T> Node<T> {
     fn new_as_pointer(val: T) -> *mut Self {
         Box::into_raw(Box::new(Node {
             data: Some(val),
@@ -137,7 +134,7 @@ impl<T: Debug> Node<T> {
     }
 }
 
-impl<T: Debug> Default for Node<T> {
+impl<T> Default for Node<T> {
     fn default() -> Self {
         Node {
             data: None,
@@ -147,16 +144,16 @@ impl<T: Debug> Default for Node<T> {
 } 
 
 #[derive(Debug)]
-struct EliminationLayer<T: Send + Debug> {
+struct EliminationLayer<T: Send> {
     operations: UnsafeCell<HashMap<thread::ThreadId, AtomicPtr<OpInfo<T>>>>,
     collisions: Vec<AtomicPtr<Option<thread::ThreadId>>>,
     collision_size: usize,
     manager: HPBRManager<OpInfo<T>>
 }
 
-unsafe impl<T: Debug + Send> Sync for EliminationLayer<T> {}
+unsafe impl<T: Send> Sync for EliminationLayer<T> {}
 
-impl<T: Debug + Send> Drop for EliminationLayer<T> {
+impl<T: Send> Drop for EliminationLayer<T> {
     fn drop(&mut self) {
         unsafe {
             // Delete all the opinfos pointed to by the map
@@ -180,7 +177,7 @@ impl<T: Debug + Send> Drop for EliminationLayer<T> {
     }
 }
 
-impl<T: Debug + Send> EliminationLayer<T> {
+impl<T: Send> EliminationLayer<T> {
     fn new(max_threads: usize, collision_size: usize) -> Self {
         let mut collisions: Vec<AtomicPtr<Option<thread::ThreadId>>> = Vec::new();
         for _ in 0..collision_size {
@@ -360,18 +357,18 @@ impl<T: Debug + Send> EliminationLayer<T> {
 //unsafe impl<T: Debug> Sync for EliminationLayerOld<T> {}
 
 #[derive(Debug)]
-struct OpInfo<T: Debug + Send> {
+struct OpInfo<T: Send> {
     operation: OpType,
     data: *mut Option<T>
 }
 
-impl<T: Debug + Send> Drop for OpInfo<T> {
+impl<T: Send> Drop for OpInfo<T> {
     fn drop(&mut self) {}
 }
 
-unsafe impl<T: Debug + Send> Send for OpInfo<T> {}
+unsafe impl<T: Send> Send for OpInfo<T> {}
 
-impl<T: Debug + Send> OpInfo<T> {
+impl<T: Send> OpInfo<T> {
     fn new(operation: OpType, data: Option<T>) -> Self {
         OpInfo {
             operation,
@@ -395,7 +392,7 @@ impl<T: Debug + Send> OpInfo<T> {
     }
 }
 
-impl<T: Debug + Send> Default for OpInfo<T> {
+impl<T: Send> Default for OpInfo<T> {
     fn default() -> Self {
         OpInfo {
             operation: OpType::Done,

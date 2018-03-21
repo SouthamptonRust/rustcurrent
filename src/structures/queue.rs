@@ -1,22 +1,21 @@
 use memory::HPBRManager;
 use std::sync::atomic::{AtomicPtr, Ordering};
-use std::fmt::Debug;
 use std::ptr;
 
 #[derive(Debug)]
-pub struct Queue<T: Debug + Send> {
+pub struct Queue<T: Send> {
     head: AtomicPtr<Node<T>>,
     tail: AtomicPtr<Node<T>>,
     manager: HPBRManager<Node<T>>
 }
 
 #[derive(Debug)]
-pub struct Node<T: Debug + Send> {
+pub struct Node<T: Send> {
     next: AtomicPtr<Node<T>>,
     value: Option<T>
 }
 
-impl<T: Send + Debug> Queue<T> {
+impl<T: Send> Queue<T> {
     pub fn new() -> Self {
         let dummy_node = Box::into_raw(Box::new(Node::new_dummy_node()));
         Queue {
@@ -116,7 +115,7 @@ impl<T: Send + Debug> Queue<T> {
     }
 }
 
-impl<T: Send + Debug> Drop for Queue<T> {
+impl<T: Send> Drop for Queue<T> {
     fn drop(&mut self) {
         let mut current = self.head.load(Ordering::Relaxed);
         while !current.is_null() {
@@ -129,7 +128,7 @@ impl<T: Send + Debug> Drop for Queue<T> {
     }
 }
 
-impl<T: Send + Debug> Node<T> {
+impl<T: Send> Node<T> {
     fn new(value: T) -> Self {
         Node {
             next: AtomicPtr::default(),
@@ -154,7 +153,7 @@ impl<T: Send + Debug> Node<T> {
     }
 }
 
-impl<T: Send + Debug> Default for Node<T> {
+impl<T: Send> Default for Node<T> {
     fn default() -> Self {
         Node {
             next: AtomicPtr::default(),

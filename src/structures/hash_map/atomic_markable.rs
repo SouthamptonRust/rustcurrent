@@ -35,16 +35,16 @@ pub fn mark_array_node<T>(ptr: *mut T) -> *mut T {
 
 #[derive(Debug)]
 pub struct AtomicMarkablePtr<K, V>
-where K: Debug + Send,
-      V: Send + Debug 
+where K: Send,
+      V: Send 
 {
     ptr: AtomicUsize,
     marker: PhantomData<(K, V)>
 }
 
 impl<K, V> AtomicMarkablePtr<K, V>
-where K: Send + Debug,
-      V: Send + Debug       
+where K: Send,
+      V: Send       
 {    
     pub fn mark(&self) {
         self.ptr.fetch_or(0x1, Ordering::SeqCst);
@@ -81,8 +81,8 @@ where K: Send + Debug,
 }
 
 impl<K, V> Drop for AtomicMarkablePtr<K, V>
-where K: Send + Debug,
-      V: Send + Debug
+where K: Send,
+      V: Send
 {
     fn drop(&mut self) {
         let mut ptr = self.ptr.load(Ordering::Relaxed) as *mut Node<K, V>;
@@ -96,8 +96,8 @@ where K: Send + Debug,
 }
 
 impl<K, V> Default for AtomicMarkablePtr<K, V>
-where K: Debug + Send,
-      V: Send + Debug
+where K: Send,
+      V: Send
 {
     fn default() -> Self {
         Self {
@@ -108,15 +108,15 @@ where K: Debug + Send,
 } 
 
 #[derive(Debug)]
-pub struct DataNode<K, V: Debug> {
+pub struct DataNode<K, V> {
     pub key: u64,
     pub value: Option<V>,
     marker: PhantomData<K>
 }
 
 impl<K, V> DataNode<K, V> 
-where K: Send + Debug,
-      V: Send + Debug 
+where K: Send,
+      V: Send 
 {
     pub fn new(key: u64, value: V) -> Self {
         Self {
@@ -128,8 +128,8 @@ where K: Send + Debug,
 }
 
 impl<K, V> Default for DataNode<K, V>
-where K: Send + Debug,
-      V: Send + Debug
+where K: Send,
+      V: Send
 {
     fn default() -> Self {
         Self {
@@ -142,16 +142,16 @@ where K: Send + Debug,
 
 #[derive(Debug)]
 pub struct ArrayNode<K, V> 
-where K: Debug + Send,
-      V: Send + Debug
+where K: Send,
+      V: Send
 {
     pub array: Vec<AtomicMarkablePtr<K, V>>,
     size: usize
 }
 
 impl<K, V> ArrayNode<K, V>
-where K: Debug + Send,
-      V: Send + Debug  
+where K: Send,
+      V: Send  
 {
     pub fn new(size: usize) -> Self {
         let mut array = Vec::with_capacity(size);
@@ -164,7 +164,10 @@ where K: Debug + Send,
         }
     }
 
-    pub unsafe fn to_string(&self, start: &mut String, depth: usize) {
+    pub unsafe fn to_string(&self, start: &mut String, depth: usize)
+    where K: Debug,
+          V: Debug 
+    {
         let mut none_count = 0;
         start.push_str("\n");
         for _ in 0..depth {
@@ -209,8 +212,8 @@ where K: Debug + Send,
 
 #[derive(Debug)]
 pub enum Node<K, V> 
-where K: Send + Debug,
-      V: Send + Debug
+where K: Send,
+      V: Send
 {
     Data(DataNode<K, V>),
     Array(ArrayNode<K, V>)
