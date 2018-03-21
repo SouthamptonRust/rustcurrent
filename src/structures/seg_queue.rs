@@ -7,6 +7,19 @@ use std::mem;
 use rand;
 use rand::Rng;
 
+/// A lock-free k-FIFO segmented queue.
+///
+/// This is an implementation of a k-FIFO queue as described in [Fast and Scalable k-FIFO Queues]
+/// (https://link.springer.com/chapter/10.1007/978-3-642-39958-9_18). The idea behind the k-FIFO
+/// queue is to relax the consistency requirement of the queue so that any of the `k` first
+/// enqueued elements can be the first to be dequeued. This allows for greater scalability since
+/// there is less contention, and the drift from normal queue semantics is bounded by `k`.
+///
+/// The queue is implemented as a linked-list of nodes, each containing an array of elements. 
+/// Once a node is full, a new one is enqueued. Once a node is empty, it is dequeued and freed.
+/// 
+/// If relaxed consistency is undesirable, do not set `k` to 1. Instead, use the Queue structure
+/// from the `rustcurrent` library as it is far better optimised for that scenario.
 pub struct SegQueue<T: Send> {
     head: AtomicPtr<Node<T>>,
     tail: AtomicPtr<Node<T>>,
@@ -15,6 +28,11 @@ pub struct SegQueue<T: Send> {
 }
 
 impl<T: Send> SegQueue<T> {
+    /// Create a new SegQueue with a given node size.
+    /// # Examples
+    /// ```
+    /// let queue: SegQueue<u8> = SegQueue::new(8);
+    /// ```
     pub fn new(k: usize) -> Self {
         let init_node: *mut Node<T> = Box::into_raw(Box::new(Node::new(k)));
         SegQueue {
@@ -25,6 +43,12 @@ impl<T: Send> SegQueue<T> {
         }
     }
 
+    /// Enqueue the given data.
+    /// # Examples
+    /// ```
+    /// let queue: SegQueue<u8> = SegQueue::new(8);
+    /// queue.enqueue(8);
+    /// ``` 
     pub fn enqueue(&self, data: T) {
         let mut vec: Vec<usize> = (0..self.k).collect();
         let vals = vec.as_mut_slice();
@@ -129,6 +153,14 @@ impl<T: Send> SegQueue<T> {
         }
     }
 
+    /// Attempt to dequeue a piece of data, returning None if the queue is empty. If
+    /// the front segment is empty, it will be dequeued.
+    /// # Examples
+    /// ```
+    /// let queue: SegQueue<u8> = SegQueue::new(8);
+    /// queue.enqueue(8);
+    /// assert_eq!(queue.dequeue(), Some(8));
+    /// ```
     pub fn dequeue(&self) -> Option<T> {
         let mut vec: Vec<usize> = (0..self.k).collect();
         let vals = vec.as_mut_slice();
