@@ -15,7 +15,7 @@ const KEY_SIZE: usize = 64;
 const MAX_FAILURES: u64 = 10;
 
 pub struct HashMap<K, V> 
-where K: Send ,
+where K: Send,
       V: Send 
 {
     head: Vec<AtomicMarkablePtr<K, V>>,
@@ -25,7 +25,7 @@ where K: Send ,
     manager: HPBRManager<Node<K, V>>
 }
 
-impl<K: Eq + Hash  + Send, V: Send  + Eq> HashMap<K, V> {
+impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
     /// Create a new Wait-Free HashMap with the default head size
     pub fn new() -> Self {
         let mut head: Vec<AtomicMarkablePtr<K, V>> = Vec::with_capacity(HEAD_SIZE);
@@ -540,7 +540,7 @@ impl<K: Eq + Hash  + Send, V: Send  + Eq> HashMap<K, V> {
 
     fn get_clone<Q: ?Sized>(&self, key: &Q) -> Option<V> 
     where K: Borrow<Q>,
-          Q: Eq + Hash + Send ,
+          Q: Eq + Hash + Send,
           V: Clone
     {
         let hash = self.hash(key);
@@ -680,7 +680,7 @@ where K: Eq + Hash + Send + Debug,
 }
 
 impl<K, V> Default for HashMap<K, V>
-where K: Eq + Hash + Send ,
+where K: Eq + Hash + Send,
       V: Eq + Send 
 {
     fn default() -> Self {
