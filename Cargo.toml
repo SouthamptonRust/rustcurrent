@@ -2,8 +2,13 @@
 name = "rustcurrent"
 version = "0.1.0"
 authors = ["Joshua Marron <marronjosh@hotmail.com>"]
-
+[dev-dependencies]
+criterion = "0.2.1"
 [dependencies]
 time = "0.1"
 rand = "0.3"
 thread_local = "0.3"
+
+[[bench]]
+name="bench_stack"
+harness=false
