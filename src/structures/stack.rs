@@ -252,7 +252,7 @@ impl<T: Send> EliminationLayer<T> {
             if self.collisions[them_pos].compare_exchange_weak(them_ptr, me, Ordering::AcqRel, Ordering::Acquire).is_ok() {
                 break;
             }
-            println!("I'm stuck");
+            //println!("I'm stuck");
         }
         // can't do early returns!
         unsafe {
@@ -277,7 +277,7 @@ impl<T: Send> EliminationLayer<T> {
                     if me_atomic.compare_exchange_weak(op_info_ptr, new_none, Ordering::AcqRel, Ordering::Acquire).is_ok() {
                         new_none = OpInfo::new_done_as_pointer((*op_info_ptr).data);
                         if them_atomic.compare_exchange_weak(them_info_ptr, new_none, Ordering::AcqRel, Ordering::Acquire).is_ok() {
-                            println!("{:?} eliminated active with {:?}", thread_id, them);
+                            //println!("{:?} eliminated active with {:?}", thread_id, them);
                             
                             // Can retire our info, since the one in the data structure is "new_none"
                             self.manager.retire(op_info_ptr, 0);
@@ -296,7 +296,7 @@ impl<T: Send> EliminationLayer<T> {
                                 }
                             };
                         } else {
-                            println!("{:?} failed to eliminate active", thread_id);
+                            //println!("{:?} failed to eliminate active", thread_id);
 
                             // Free the unused none_ptr
                             Box::from_raw(new_none);
@@ -311,7 +311,7 @@ impl<T: Send> EliminationLayer<T> {
                             return Err(data);
                         } 
                     } else {
-                        println!("{:?} eliminated passive!", thread_id);
+                        //println!("{:?} eliminated passive!", thread_id);
                         // If my info has been swapped out, then someone else will have freed my info
                         // Free the unused none ptr
                         Box::from_raw(new_none);
@@ -335,7 +335,7 @@ impl<T: Send> EliminationLayer<T> {
             }
         }
 
-        thread::sleep(Duration::from_millis(20));
+        thread::sleep(Duration::from_millis(1));
 
         unsafe {
             let operations = self.get_mut_operations();
@@ -343,7 +343,7 @@ impl<T: Send> EliminationLayer<T> {
             
             let new_none = OpInfo::new_done_as_pointer((*op_info_ptr).data);
             if me_atomic.compare_exchange_weak(op_info_ptr, new_none, Ordering::AcqRel, Ordering::Acquire).is_err() {
-                println!("{:?} eliminated passive!", thread_id);
+                //println!("{:?} eliminated passive!", thread_id);
                 // Free the unused none node
                 Box::from_raw(new_none);
 

@@ -265,7 +265,7 @@ struct HazardPointer<T: Send> {
 
 impl<T: Send> Drop for HazardPointer<T> {
     fn drop(&mut self) {
-        println!("Dropping hazard pointer");
+        //println!("Dropping hazard pointer");
     }
 }
 
