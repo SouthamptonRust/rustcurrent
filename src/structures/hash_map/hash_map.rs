@@ -45,7 +45,7 @@ const MAX_FAILURES: u64 = 10;
 /// recursive destructors: they should not be able to overflow the stack.
 pub struct HashMap<K, V> 
 where K: Send,
-      V: Send 
+      V: Send
 {
     head: Vec<AtomicMarkablePtr<K, V>>,
     hasher: RandomState,
@@ -89,32 +89,37 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
     /// at this position to the new ArrayNode.
     fn expand_map(&self, bucket: &Vec<AtomicMarkablePtr<K, V>>, pos: usize, shift_amount: usize) -> *mut Node<K, V> {
         // We know this node must exist
-        let node = atomic_markable::unmark(bucket[pos].get_ptr().unwrap());
-        self.manager.protect(node, 3);
+        //println!("expanding: {:?} at {:?}", bucket, pos);
+        let node = bucket[pos].get_ptr().unwrap();
+        self.manager.protect(atomic_markable::unmark(node), 3);
         if atomic_markable::is_array_node(node) {
+            //println!("already expanded: {:b}", node as usize);
             return node
         }
         let node2 = bucket[pos].get_ptr().unwrap();
         if !ptr::eq(node, node2) {
+            //println!("someone else: {:b}", node2 as usize);
             return node2
         }
 
         let array_node: ArrayNode<K, V> = ArrayNode::new(CHILD_SIZE);
         unsafe {
-            let hash = match &*node {
+            let hash = match &*atomic_markable::unmark(node) {
                 &Node::Data(ref data_node) => data_node.key,
                 &Node::Array(_) => {panic!("Unexpected array node!")}
             };
             let new_pos = (hash >> (shift_amount + self.shift_step)) as usize & (CHILD_SIZE - 1);
-            array_node.array[new_pos].ptr().store(node as usize, Ordering::Release);
+            array_node.array[new_pos].ptr().store(atomic_markable::unmark(node) as usize, Ordering::Release);
 
             let array_node_ptr = Box::into_raw(Box::new(Node::Array(array_node)));
             let array_node_ptr_marked = atomic_markable::mark_array_node(array_node_ptr);
             return match bucket[pos].compare_exchange(node, array_node_ptr_marked) {
                 Ok(_) => {
+                    //println!("expanded on me");
                     array_node_ptr_marked
                 },
                 Err(current) => {
+                    //println!("someone else: {:b}", current as usize);
                     // Need to remove the pointer to the old element or this will delete a valid node
                     let vec = HashMap::get_bucket(array_node_ptr);
                     vec[new_pos].ptr().store(0, Ordering::Release); 
@@ -160,11 +165,18 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                             Err(old) => { return Err((key, old)) }
                         }
                     },
-                    Some(node_ptr) => {
+                    Some(mut node_ptr) => {
                         if atomic_markable::is_marked(node_ptr) {
                             // Check that doing this never breaks, ie expand_map returns a data node
-                            bucket = HashMap::get_bucket(self.expand_map(bucket, pos, r));
-                            break;
+                            let new_bucket_ptr = self.expand_map(bucket, pos, r);
+                            if atomic_markable::is_array_node(new_bucket_ptr) {
+                                bucket = HashMap::get_bucket(new_bucket_ptr);
+                                break;
+                            } else {
+                                //println!("hello");
+                                node_ptr = new_bucket_ptr;
+                                //println!("fart");
+                            }
                         }
                         if atomic_markable::is_array_node(node_ptr) {
                             bucket = HashMap::get_bucket(node_ptr);
@@ -178,31 +190,26 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                                 continue;
                             } else {
                                 // Hazard pointer should be safe
-                                unsafe {
-                                    let data_node = self.get_data_node(node_ptr);
-                                    if data_node.key == hash {
-                                        return Err((key, value))
-                                    }
-                                    match &*node_ptr {
-                                        &Node::Array(_) => panic!("Unexpected array node!,{:b}", node_ptr as usize),
-                                        &Node::Data(ref data_node) => {
-                                            if data_node.key == hash {
-                                                return Err((key, value))
-                                            }
-                                            // If we get here, we have failed, but have a different key
-                                            // We should thus expand because of contention
-                                            node = Some(self.expand_map(bucket, pos, r));
-                                            if atomic_markable::is_array_node(node.unwrap()) {
-                                                match &*(atomic_markable::unmark_array_node(node.unwrap())) {
-                                                    &Node::Array(ref array_node) => {
-                                                        bucket = &array_node.array;
-                                                        break;
-                                                    },
-                                                    &Node::Data(_) => panic!("Unexpected data node!")
-                                                }
-                                            } else {
-                                                fail_count += 1;
-                                            }
+                                let data_node = self.get_data_node(node_ptr);
+                                if data_node.key == hash {
+                                    return Err((key, value))
+                                }
+                                match bucket[pos].compare_and_mark(node_ptr) {
+                                    Ok(_) => {
+                                        let new_ptr = self.expand_map(bucket, pos, r);
+                                        if atomic_markable::is_array_node(new_ptr) {
+                                            bucket = HashMap::get_bucket(new_ptr);
+                                            break;
+                                        } else {
+                                            fail_count += 1;
+                                        }
+                                    },
+                                    Err(current) => {
+                                        if atomic_markable::is_array_node(current) {
+                                            bucket = HashMap::get_bucket(current);
+                                            break;
+                                        } else {
+                                            fail_count += 1;   
                                         }
                                     }
                                 }
@@ -260,10 +267,14 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
             match node {
                 None => { return None; }
                 Some(mut node_ptr) => {
+                    if atomic_markable::is_marked(node_ptr) {
+                        let new_bucket_ptr = self.expand_map(bucket, pos, r);
+                        node_ptr = new_bucket_ptr;
+                    }
                     if atomic_markable::is_array_node(node_ptr) {
                         bucket = HashMap::get_bucket(node_ptr);
-                    } else if atomic_markable::is_marked(node_ptr) {
-                        bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
+                        r += self.shift_step;
+                        continue;
                     } else {
                         self.manager.protect(atomic_markable::unmark(node_ptr), 0);
                         // Check the hazard pointer
@@ -272,15 +283,18 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                             while node != bucket[pos].get_ptr() {
                                 node = bucket[pos].get_ptr();
                                 match node {
-                                    None => { break; },
+                                    None => { return None },
                                     Some(new_ptr) => {
                                         self.manager.protect(atomic_markable::unmark(atomic_markable::unmark_array_node(new_ptr)), 0);
                                         fail_count += 1;
                                         if fail_count > MAX_FAILURES {
                                             bucket[pos].mark();
                                             // Force a bucket update
-                                            bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
-                                            continue;
+                                            //println!("hello");
+                                            node_ptr = self.expand_map(bucket, pos, r);
+                                            bucket = HashMap::get_bucket(node_ptr);
+                                            //println!("fart");
+                                            break;
                                         }
                                         node_ptr = new_ptr;
                                     }
@@ -288,10 +302,12 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                             }
                             // Hazard pointer should be fine now
                             if atomic_markable::is_marked(node_ptr) {
-                               bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
+                                bucket = HashMap::get_bucket(self.expand_map(bucket, pos, r));
+                                r += self.shift_step;
                                 continue;
                             } else if atomic_markable::is_array_node(node_ptr) {
-                                HashMap::get_bucket(node_ptr);
+                                bucket = HashMap::get_bucket(node_ptr);
+                                r += self.shift_step;
                                 continue;
                             }
                         }
@@ -380,10 +396,14 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
             match node {
                 None => { return Err(new) },
                 Some(mut node_ptr) => {
+                    if atomic_markable::is_marked(node_ptr) {
+                        let new_bucket_ptr = self.expand_map(bucket, pos, r);
+                        node_ptr = new_bucket_ptr;
+                    }
                     if atomic_markable::is_array_node(node_ptr) {
                         bucket = HashMap::get_bucket(node_ptr);
-                    } else if atomic_markable::is_marked(node_ptr) {
-                        bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
+                        r += self.shift_step;
+                        continue;
                     } else {
                         self.manager.protect(atomic_markable::unmark(node_ptr), 1);
                         if node != bucket[pos].get_ptr() {
@@ -398,8 +418,8 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                                         if fail_count > MAX_FAILURES {
                                             bucket[pos].mark();
                                             // Force a bucket update
-                                            bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
-                                            continue;
+                                            bucket = HashMap::get_bucket(self.expand_map(bucket, pos, r));
+                                            break;
                                         }
                                         node_ptr = new_ptr;
                                     }
@@ -407,9 +427,11 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                             }
                             if atomic_markable::is_array_node(node_ptr) {
                                 bucket = HashMap::get_bucket(node_ptr);
+                                r += self.shift_step;
                                 continue;
                             } else if atomic_markable::is_marked(node_ptr) {
-                                bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
+                                bucket = HashMap::get_bucket(self.expand_map(bucket, pos, r));
+                                r += self.shift_step;
                                 continue;
                             }
                         }
@@ -431,7 +453,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                                     } else if atomic_markable::is_marked(current_ptr) &&
                                               ptr::eq(node_ptr, atomic_markable::unmark(current_ptr)) 
                                     {
-                                        bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
+                                        bucket = HashMap::get_bucket(self.expand_map(bucket, pos, r));
                                         value
                                     } else {
                                         return Err(value);
@@ -523,7 +545,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                     if atomic_markable::is_array_node(node_ptr) {
                         bucket = HashMap::get_bucket(node_ptr);
                     } else if atomic_markable::is_marked(node_ptr) {
-                        bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
+                        bucket = HashMap::get_bucket(self.expand_map(bucket, pos, r));
                     } else {
                         self.manager.protect(atomic_markable::unmark(node_ptr), 2);
                         if node != bucket[pos].get_ptr() {
@@ -538,7 +560,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                                         if fail_count > MAX_FAILURES {
                                             bucket[pos].mark();
                                             // Force a bucket update
-                                            bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
+                                            bucket = HashMap::get_bucket(self.expand_map(bucket, pos, r));
                                             continue;
                                         }
                                         node_ptr = new_ptr;
@@ -548,9 +570,11 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                             // Hazard pointer is safe here
                             if atomic_markable::is_array_node(node_ptr) {
                                 bucket = HashMap::get_bucket(node_ptr);
+                                r += self.shift_step;
                                 continue;
                             } else if atomic_markable::is_marked(node_ptr) {
-                                bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
+                                bucket = HashMap::get_bucket(self.expand_map(bucket, pos, r));
+                                r += self.shift_step;
                                 continue;
                             }
                         }
@@ -563,6 +587,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                                 Ok(()) => {
                                     // Get the value out of the node_ptr, return it, retire it?
                                     unsafe {
+                                        //println!("removed: {:b}", node_ptr as usize);
                                         let owned_node = ptr::replace(node_ptr, Node::Data(DataNode::default()));
                                         if let Node::Data(node) = owned_node {
                                             let data = node.value;
@@ -579,7 +604,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                                     } else if atomic_markable::is_marked(current)
                                         && ptr::eq(atomic_markable::unmark(current), node_ptr) 
                                     {
-                                        bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
+                                        bucket = HashMap::get_bucket(self.expand_map(bucket, pos, r));
                                     } else {
                                         return None
                                     }
@@ -598,6 +623,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
         match node {
             None => None,
             Some(node_ptr) => {
+                //println!("nodeptr: {:b}", node_ptr as usize);
                 let data_node = self.get_data_node(node_ptr);
                 if data_node.value.as_ref() == Some(expected) {
                     match self.try_remove(&bucket[pos], node_ptr) {
@@ -651,10 +677,23 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
             match node {
                 None => { return None; }
                 Some(mut node_ptr) => {
+                    if atomic_markable::is_marked(node_ptr) {
+                        let new_bucket_ptr = self.expand_map(bucket, pos, r);
+                        node_ptr = new_bucket_ptr;
+                        /* if atomic_markable::is_array_node(new_bucket_ptr) {
+                            //println!("hello 1: {:b}", new_bucket_ptr as usize);
+                            bucket = HashMap::get_bucket(new_bucket_ptr);
+                            //println!("fart");
+                        } else {
+                            //println!("hello 2");
+                            node = Some(new_bucket_ptr);
+                            //println!("fart");
+                        } */
+                    }
                     if atomic_markable::is_array_node(node_ptr) {
                         bucket = HashMap::get_bucket(node_ptr);
-                    } else if atomic_markable::is_marked(node_ptr) {
-                        bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
+                        r += self.shift_step;
+                        continue;
                     } else {
                         self.manager.protect(atomic_markable::unmark(node_ptr), 0);
                         // Check the hazard pointer
@@ -663,15 +702,18 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                             while node != bucket[pos].get_ptr() {
                                 node = bucket[pos].get_ptr();
                                 match node {
-                                    None => { break; },
+                                    None => { return None },
                                     Some(new_ptr) => {
                                         self.manager.protect(atomic_markable::unmark(atomic_markable::unmark_array_node(new_ptr)), 0);
                                         fail_count += 1;
                                         if fail_count > MAX_FAILURES {
                                             bucket[pos].mark();
                                             // Force a bucket update
-                                            bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
-                                            continue;
+                                            //println!("hello");
+                                            node_ptr = self.expand_map(bucket, pos, r);
+                                            bucket = HashMap::get_bucket(node_ptr);
+                                            //println!("fart");
+                                            break;
                                         }
                                         node_ptr = new_ptr;
                                     }
@@ -679,16 +721,18 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                             }
                             // Hazard pointer should be fine now
                             if atomic_markable::is_marked(node_ptr) {
-                               bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
+                                bucket = HashMap::get_bucket(self.expand_map(bucket, pos, r));
+                                r += self.shift_step;
                                 continue;
                             } else if atomic_markable::is_array_node(node_ptr) {
-                                HashMap::get_bucket(node_ptr);
+                                bucket = HashMap::get_bucket(node_ptr);
+                                r += self.shift_step;
                                 continue;
                             }
                         }
                         let data_node = self.get_data_node(node_ptr);
                         if data_node.key == hash {
-                            return data_node.value.clone()
+                            return data_node.value.clone();
                         } else {
                             return None
                         }
@@ -724,7 +768,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
     fn get_bucket<'a>(array_node: *mut Node<K, V>) -> &'a Vec<AtomicMarkablePtr<K, V>> {
         unsafe {
             match &*(atomic_markable::unmark_array_node(array_node)) {
-                &Node::Data(_) => panic!("Unexpected data node!"),
+                &Node::Data(_) => panic!("Unexpected data node!: {:b}", array_node as usize),
                 &Node::Array(ref array_node) => { &array_node.array }
             }
         }
@@ -828,9 +872,9 @@ mod tests {
         assert_eq!(map.update(&239, &239, 7), Ok(()));
         assert_eq!(map.get(&3), Some(&7));
 
-        println!("{:?}", map);
+        //println!("{:?}", map);
 
-        println!("{:?}", map.get(&3));
+        //println!("{:?}", map.get(&3));
         assert_eq!(map.remove(&3, &7), Some(7));
         assert_eq!(map.remove(&250, &2), None);
 
@@ -858,14 +902,14 @@ mod tests {
             wait_vec.push(thread::spawn(move || {
                 for j in 0..2000 {
                     let val = format!("{}--{}", i, j);
-                    //println!("inserting");
+                    ////println!("inserting");
                     match map_clone.insert(j, val) {
                         Ok(()) => {},
                         Err((key, value)) => {
                             let expected = map_clone.get(&key);
                             match expected {
                                 Some(expected_value) => {
-                                    //println!("updating");
+                                    ////println!("updating");
                                     let _ = map_clone.update(&key, expected_value, value);
                                 },
                                 None => {}
@@ -877,13 +921,13 @@ mod tests {
         }
 
         for handle in wait_vec {
-            println!("joined: {:?}", handle);
+            //println!("joined: {:?}", handle);
             match handle.join() {
                 Ok(_) => {},
                 Err(_) => panic!("A thread panicked, test failed!")
             }
         }
-        println!("{:?}", map.get(&1174));
+        //println!("{:?}", map.get(&1174));
     }
 
     #[test]
@@ -898,15 +942,19 @@ mod tests {
                     for i in 0..1000 {
                         map_clone.insert(i, i);
                     }
+                    //println!("done inserting");
                     for i in 1000..2000 {
                         map_clone.get(&i);
                     }
+                    //println!("done normal get");
                     for i in 0..7000 {
                         map_clone.get_clone(&(i % 1000));
                     }
+                    //println!("done clone get");
                     for i in 0..200 {
                         map_clone.remove(&i, &i);
                     }
+                    //println!("done removing");
                 }));
             }
 
@@ -916,15 +964,21 @@ mod tests {
                 for i in 1000..2000 {
                     map_clone.insert(i, i);
                 }
+                //println!("done inserting");
                 for i in 0..1000 {
-                    map_clone.get(&i);
+                    if (i > 300 && i < 800) {
+                        assert_eq!(map_clone.get(&i), Some(&i));
+                    }
                 }
+                //println!("done normal get");
                 for i in 0..7000 {
                     map_clone.get_clone(&((i % 1000) + 1000));
                 }
+                //println!("done clone get");
                 for i in 1000..1200 {
                     map_clone.remove(&i, &i);
                 }
+                //println!("done removing");
             }));
         }
 

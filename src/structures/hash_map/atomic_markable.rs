@@ -1,6 +1,7 @@
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::fmt::Debug;
+use std::fmt;
 
 pub fn is_marked<T>(ptr: *mut T) -> bool {
     let ptr_usize = ptr as usize;
@@ -33,13 +34,23 @@ pub fn mark_array_node<T>(ptr: *mut T) -> *mut T {
     (ptr_usize | 0x2) as *mut T
 }
 
-#[derive(Debug)]
+pub fn mark<T>(ptr: *mut T) -> *mut T {
+    let ptr_usize = ptr as usize;
+    (ptr_usize | 0x1) as *mut T
+}
+
 pub struct AtomicMarkablePtr<K, V>
 where K: Send,
       V: Send 
 {
     ptr: AtomicUsize,
     marker: PhantomData<(K, V)>
+}
+
+impl<K: Send, V: Send> Debug for AtomicMarkablePtr<K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:b}", self.ptr.load(Ordering::Relaxed))
+    }
 }
 
 impl<K, V> AtomicMarkablePtr<K, V>
@@ -70,6 +81,14 @@ where K: Send,
                 -> Result<*mut Node<K, V>, *mut Node<K, V>> 
     {
         match self.ptr.compare_exchange(old as usize, new as usize, Ordering::SeqCst, Ordering::Acquire) {
+            Ok(ptr) => Ok(ptr as *mut Node<K, V>),
+            Err(ptr) => Err(ptr as *mut Node<K, V>)
+        }
+    }
+
+    pub fn compare_and_mark(&self, old: *mut Node<K, V>) -> Result<*mut Node<K, V>, *mut Node<K, V>> {
+        let marked_ptr = mark(old);
+        match self.ptr.compare_exchange(old as usize, marked_ptr as usize, Ordering::SeqCst, Ordering::Acquire) {
             Ok(ptr) => Ok(ptr as *mut Node<K, V>),
             Err(ptr) => Err(ptr as *mut Node<K, V>)
         }
