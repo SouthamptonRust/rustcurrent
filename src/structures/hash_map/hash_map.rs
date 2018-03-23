@@ -71,7 +71,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
             hasher: RandomState::new(),
             head_size: HEAD_SIZE,
             shift_step: f64::floor((CHILD_SIZE as f64).log2()) as usize,
-            manager: HPBRManager::new(100, 1)
+            manager: HPBRManager::new(100, 3)
         }   
     }
 
@@ -385,7 +385,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                     } else if atomic_markable::is_marked(node_ptr) {
                         bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
                     } else {
-                        self.manager.protect(atomic_markable::unmark(node_ptr), 0);
+                        self.manager.protect(atomic_markable::unmark(node_ptr), 1);
                         if node != bucket[pos].get_ptr() {
                             let mut fail_count = 0;
                             while node != bucket[pos].get_ptr() {
@@ -393,7 +393,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                                 match node {
                                     None => { return Err(new); },
                                     Some(new_ptr) => {
-                                        self.manager.protect(atomic_markable::unmark(atomic_markable::unmark_array_node(new_ptr)), 0);
+                                        self.manager.protect(atomic_markable::unmark(atomic_markable::unmark_array_node(new_ptr)), 1);
                                         fail_count += 1;
                                         if fail_count > MAX_FAILURES {
                                             bucket[pos].mark();
@@ -421,7 +421,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                             }
                             new = match self.try_update(&bucket[pos], node_ptr, hash, new) {
                                 Ok(()) => { 
-                                    self.manager.retire(node_ptr, 0);
+                                    self.manager.retire(node_ptr, 1);
                                     return Ok(()) 
                                 },
                                 Err((value, current_ptr)) => {
@@ -457,7 +457,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                 if data_node.value.as_ref() == Some(expected) {
                     match self.try_update(&bucket[pos], node_ptr, hash, new) {
                         Ok(()) => {
-                            self.manager.retire(node_ptr, 0);
+                            self.manager.retire(node_ptr, 1);
                             Ok(())
                         },
                         Err((value, _)) => {
@@ -525,7 +525,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                     } else if atomic_markable::is_marked(node_ptr) {
                         bucket = HashMap::get_bucket(self.expand_map(bucket, pos, self.shift_step));
                     } else {
-                        self.manager.protect(atomic_markable::unmark(node_ptr), 0);
+                        self.manager.protect(atomic_markable::unmark(node_ptr), 2);
                         if node != bucket[pos].get_ptr() {
                             let mut fail_count = 0;
                             while node != bucket[pos].get_ptr() {
@@ -533,7 +533,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                                 match node {
                                     None => { return None; },
                                     Some(new_ptr) => {
-                                        self.manager.protect(atomic_markable::unmark(atomic_markable::unmark_array_node(new_ptr)), 0);
+                                        self.manager.protect(atomic_markable::unmark(atomic_markable::unmark_array_node(new_ptr)), 2);
                                         fail_count += 1;
                                         if fail_count > MAX_FAILURES {
                                             bucket[pos].mark();
@@ -566,7 +566,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                                         let owned_node = ptr::replace(node_ptr, Node::Data(DataNode::default()));
                                         if let Node::Data(node) = owned_node {
                                             let data = node.value;
-                                            self.manager.retire(node_ptr, 0);
+                                            self.manager.retire(node_ptr, 2);
                                             return data;
                                         } else {
                                             panic!("Unexpected array node!");
@@ -607,7 +607,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                                 let owned_node = ptr::replace(node_ptr, Node::Data(DataNode::default()));
                                 if let Node::Data(node) = owned_node {
                                     let data = node.value;
-                                    self.manager.retire(node_ptr, 0);
+                                    self.manager.retire(node_ptr, 2);
                                     data
                                 } else {
                                     panic!("Unexpected array node!");
