@@ -12,3 +12,7 @@ thread_local = "0.3"
 [[bench]]
 name="bench_stack"
 harness=false
+
+[[bench]]
+name="bench_map"
+harness=false
