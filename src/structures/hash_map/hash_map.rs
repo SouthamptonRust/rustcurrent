@@ -71,7 +71,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
             hasher: RandomState::new(),
             head_size: HEAD_SIZE,
             shift_step: f64::floor((CHILD_SIZE as f64).log2()) as usize,
-            manager: HPBRManager::new(100, 3)
+            manager: HPBRManager::new(100, 4)
         }   
     }
 
@@ -90,7 +90,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
     fn expand_map(&self, bucket: &Vec<AtomicMarkablePtr<K, V>>, pos: usize, shift_amount: usize) -> *mut Node<K, V> {
         // We know this node must exist
         let node = atomic_markable::unmark(bucket[pos].get_ptr().unwrap());
-        self.manager.protect(node, 0);
+        self.manager.protect(node, 3);
         if atomic_markable::is_array_node(node) {
             return node
         }
@@ -804,7 +804,9 @@ mod tests {
     use super::HashMap;
     use std::sync::Arc;
     use std::thread;
+    use std::thread::JoinHandle;
 
+    #[ignore]
     #[test]
     fn test_single_thread_semantics() {
         let map : HashMap<u8, u8> = HashMap::new();
@@ -835,6 +837,7 @@ mod tests {
         assert_eq!(map.get(&3), None);
     }
 
+    #[ignore]
     #[test]
     fn test_borrow_string_map() {
         let map: HashMap<String, u16> = HashMap::new();
@@ -844,6 +847,7 @@ mod tests {
         assert_eq!(map.remove("hello", &8), Some(8));
     }
 
+    #[ignore]
     #[test]
     fn test_multithreaded_insert() {
         let map: Arc<HashMap<u16, String>> = Arc::new(HashMap::new());
@@ -880,6 +884,53 @@ mod tests {
             }
         }
         println!("{:?}", map.get(&1174));
+    }
+
+    #[test]
+    fn test_typical() {
+        let map: Arc<HashMap<u32, u32>> = Arc::default();
+        let mut wait_vec: Vec<JoinHandle<()>> = Vec::new();
+        let num_threads = 16;
+
+        for _ in 0..num_threads / 2 {
+            let map_clone = map.clone();
+            wait_vec.push(thread::spawn(move || {
+                    for i in 0..1000 {
+                        map_clone.insert(i, i);
+                    }
+                    for i in 1000..2000 {
+                        map_clone.get(&i);
+                    }
+                    for i in 0..7000 {
+                        map_clone.get_clone(&(i % 1000));
+                    }
+                    for i in 0..200 {
+                        map_clone.remove(&i, &i);
+                    }
+                }));
+            }
+
+        for _ in 0..num_threads / 2 {
+            let map_clone = map.clone();
+            wait_vec.push(thread::spawn(move || {
+                for i in 1000..2000 {
+                    map_clone.insert(i, i);
+                }
+                for i in 0..1000 {
+                    map_clone.get(&i);
+                }
+                for i in 0..7000 {
+                    map_clone.get_clone(&((i % 1000) + 1000));
+                }
+                for i in 1000..1200 {
+                    map_clone.remove(&i, &i);
+                }
+            }));
+        }
+
+        for handle in wait_vec {
+            handle.join().unwrap();
+        }
     }
 }
 
