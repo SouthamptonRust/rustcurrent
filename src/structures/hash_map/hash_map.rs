@@ -850,7 +850,6 @@ mod tests {
     use std::thread;
     use std::thread::JoinHandle;
 
-    #[ignore]
     #[test]
     fn test_single_thread_semantics() {
         let map : HashMap<u8, u8> = HashMap::new();
@@ -872,7 +871,7 @@ mod tests {
         assert_eq!(map.update(&239, &239, 7), Ok(()));
         assert_eq!(map.get(&3), Some(&7));
 
-        //println!("{:?}", map);
+        println!("{:?}", map);
 
         //println!("{:?}", map.get(&3));
         assert_eq!(map.remove(&3, &7), Some(7));

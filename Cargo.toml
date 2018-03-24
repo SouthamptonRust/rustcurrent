@@ -16,3 +16,7 @@ harness=false
 [[bench]]
 name="bench_map"
 harness=false
+
+[[bench]]
+name="bench_seg_queue"
+harness=false
