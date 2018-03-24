@@ -851,6 +851,7 @@ mod tests {
     use std::thread::JoinHandle;
 
     #[test]
+    #[ignore]
     fn test_single_thread_semantics() {
         let map : HashMap<u8, u8> = HashMap::new();
 
@@ -930,6 +931,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_typical() {
         let map: Arc<HashMap<u32, u32>> = Arc::default();
         let mut wait_vec: Vec<JoinHandle<()>> = Vec::new();

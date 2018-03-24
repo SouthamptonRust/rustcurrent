@@ -1,5 +1,5 @@
 use memory::HPBRManager;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicBool, Ordering};
 use std::fmt::Debug;
 use std::fmt;
 use std::ptr;
@@ -114,7 +114,7 @@ impl<T: Send> SegQueue<T> {
         let head = self.head.load(Ordering::Acquire);
         let new_none_ptr: *mut Option<T> = Box::into_raw(Box::new(None));
 
-        if (*tail_old).deleted {
+        if (*tail_old).deleted.load(Ordering::Acquire) {
             return match (*tail_old).data[index].compare_exchange(item_ptr, new_none_ptr, Ordering::AcqRel, Ordering::Acquire) {
                 Ok(_) => false,
                 Err(_) => {
@@ -140,7 +140,7 @@ impl<T: Send> SegQueue<T> {
                     }  
                 }
             }
-        } else if !(*tail_old).deleted {
+        } else if !(*tail_old).deleted.load(Ordering::Acquire) {
             return true
         } else {
             return match (*tail_old).data[index].compare_exchange(item_ptr, new_none_ptr, Ordering::AcqRel, Ordering::Acquire) {
@@ -205,7 +205,10 @@ impl<T: Send> SegQueue<T> {
                     }
                 },
                 Err(()) => {
-                    if ptr::eq(head, tail) && ptr::eq(tail, self.tail.load(Ordering::Acquire)) {
+                    /* if ptr::eq(head, tail) && ptr::eq(tail, self.tail.load(Ordering::Acquire)) {
+                        return Ok(None)
+                    } */
+                    if unsafe{ (*head).next.load(Ordering::Acquire).is_null() } {
                         return Ok(None)
                     }
                     self.advance_head(head);
@@ -291,7 +294,7 @@ impl<T: Send> SegQueue<T> {
                     // Advance the head and retire old_head
                     match self.head.compare_exchange(head, head_next, Ordering::AcqRel, Ordering::Acquire) {
                         Ok(_) => {
-                            (*head).deleted = true;
+                            (*head).deleted.store(true, Ordering::Release);
                             self.manager.retire(head, 0);
                         },
                         Err(_) => {}
@@ -333,7 +336,7 @@ impl<T: Send + Debug> Debug for SegQueue<T> {
 struct Node<T: Send> {
     data: Vec<AtomicPtr<Option<T>>>,
     next: AtomicPtr<Node<T>>,
-    deleted: bool
+    deleted: AtomicBool
 }   
 
 impl<T: Send> Node<T> {
@@ -345,7 +348,7 @@ impl<T: Send> Node<T> {
         Node {
             data,
             next: AtomicPtr::default(),
-            deleted: false
+            deleted: AtomicBool::new(false)
         }
     }
 }
@@ -430,7 +433,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_with_contention() {
         let mut queue: Arc<SegQueue<u16>> = Arc::new(SegQueue::new(20));
         
