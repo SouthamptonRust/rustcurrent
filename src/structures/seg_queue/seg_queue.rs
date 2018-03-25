@@ -20,7 +20,7 @@ impl<T: Send> SegQueue<T> {
         SegQueue {
             head: AtomicPtr::new(init_node),
             tail: AtomicPtr::new(init_node),
-            manager: HPBRManager::new(100, 3),
+            manager: HPBRManager::new(100, 2),
             k
         }
     }
@@ -85,6 +85,10 @@ impl<T: Send> SegQueue<T> {
             return Err(())
         }
 
+        let mut rng = rand::thread_rng();
+        rng.shuffle(indices);
+
+        let mut hasEmpty = false;
         for index in indices {
             let cell = &Segment::get_cells_from_ptr(head)[*index];
             match cell.get_ptr() {
@@ -94,7 +98,8 @@ impl<T: Send> SegQueue<T> {
                         match cell.compare_and_mark(item_ptr) {
                             Ok(_) => { 
                                 // We got it, read
-                                return Ok(ptr::read(item_ptr))
+                                // Need to now treat this as unitialised memory
+                                unsafe { return Ok(Some(ptr::read(item_ptr))) }
                             },
                             Err(_) => {
                                 // We didn't get it
@@ -103,13 +108,20 @@ impl<T: Send> SegQueue<T> {
                     }
                 },
                 None => {
-                    // Move onto the next one
+                    hasEmpty = true;
                 }
             }
         }
 
         // How do we tell if the queue is empty?
+        if hasEmpty {
+            // Must be the last node, because there are empty slots
+            // If we reach the end and there are empty spots, we return None
+            return Ok(None)
+        }
 
+        // Queue is not empty but we didn't find a slot - need to advance the head
+        self.advance_head(head);
         Err(())
     }
 
@@ -134,6 +146,33 @@ impl<T: Send> SegQueue<T> {
                 let _ = self.tail.compare_exchange(tail_old, next, Release, Relaxed);
             }
         }
+    }
+
+    fn advance_head(&self, head_old: *mut Segment<T>) {
+        if ptr::eq(head_old, self.head.load(Acquire)) {
+            let mut tail = self.tail.load(Acquire);
+            self.manager.protect(tail, 1);
+            while tail != self.tail.load(Acquire) {
+                tail = self.tail.load(Acquire);
+                self.manager.protect(tail, 1);
+            }
+            if ptr::eq(tail, head_old) {
+                let tail_next = unsafe { (*tail).next.load(Acquire) }; 
+                if tail_next.is_null() {
+                    // Queue only has one segment
+                    return;
+                }    
+                let _ = self.tail.compare_exchange(tail, tail_next, Release, Relaxed);
+            }
+            let head_next = unsafe { (*head_old).next.load(Acquire) };
+            match self.head.compare_exchange(head_old, head_next, Release, Relaxed) {
+                Ok(_) => {
+                    self.manager.retire(head_old, 0);
+                },
+                Err(_) => {}
+            }
+        }
+        
     }
 }
 
