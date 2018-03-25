@@ -199,3 +199,55 @@ impl<T: Send> Segment<T> {
 
 }
 
+mod tests {
+    #![allow(unused_imports)]
+    use super::SegQueue;
+    use std::sync::Arc;
+    use std::thread;
+
+    #[test]
+    fn test_with_contention() {
+        let mut queue: Arc<SegQueue<u16>> = Arc::new(SegQueue::new(20));
+        
+        let mut waitvec: Vec<thread::JoinHandle<()>> = Vec::new();
+
+        for thread_no in 0..20 {
+            let mut queue_copy = queue.clone();
+            waitvec.push(thread::spawn(move || {
+                for i in 0..10000 {
+                    queue_copy.enqueue(i);
+                }
+                //println!("Push thread {} complete", i);
+            }));
+            queue_copy = queue.clone();
+            waitvec.push(thread::spawn(move || {
+                for i in 0..10000 {
+                    let mut num = 0;
+                    loop {
+                        match queue_copy.dequeue() {
+                            Some(_) => {num = 0; break},
+                            None => {
+                                num += 1;
+                                if num > 1000 {
+                                    //println!("{:?}", queue_copy);
+                                    println!("{}", num);
+                                    num = 0;
+                                }
+                            } 
+                        }
+                    }
+                }
+                println!("Pop thread {} complete", thread_no);
+            }));
+        }
+
+        for handle in waitvec {
+            match handle.join() {
+                Ok(_) => {},
+                Err(some) => println!("Couldn't join! {:?}", some) 
+            }
+        }
+        println!("Joined all");
+        assert_eq!(None, queue.dequeue());
+    }
+}
