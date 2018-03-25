@@ -6,6 +6,7 @@ use super::atomic_markable::AtomicMarkablePtr;
 use super::atomic_markable;
 use rand;
 use rand::Rng;
+use std::thread;
 
 pub struct SegQueue<T: Send> {
     head:AtomicPtr<Segment<T>>,
@@ -33,7 +34,7 @@ impl<T: Send> SegQueue<T> {
             data_box = match self.try_enqueue(data_box, vals) {
                 Ok(()) => { return; },
                 Err(val) => val
-            }
+            };
         }
     }
 
@@ -99,7 +100,9 @@ impl<T: Send> SegQueue<T> {
                             Ok(_) => { 
                                 // We got it, read
                                 // Need to now treat this as unitialised memory
-                                unsafe { return Ok(Some(ptr::read(item_ptr))) }
+                                let data = unsafe { ptr::read(item_ptr) };
+                                unsafe { Box::from_raw(item_ptr) } ; 
+                                return Ok(Some(data)) 
                             },
                             Err(_) => {
                                 // We didn't get it
@@ -114,7 +117,7 @@ impl<T: Send> SegQueue<T> {
         }
 
         // How do we tell if the queue is empty?
-        if hasEmpty {
+        if ptr::eq(head, self.tail.load(Acquire)) {
             // Must be the last node, because there are empty slots
             // If we reach the end and there are empty spots, we return None
             return Ok(None)
@@ -136,7 +139,8 @@ impl<T: Send> SegQueue<T> {
                         Ok(_) => {
                             match self.tail.compare_exchange(tail_old, new_seg_ptr, Release, Relaxed) {
                                 Ok(_) => {},
-                                Err(_) => { println!("Risky"); Box::from_raw(new_seg_ptr); }
+                                Err(_) => { //println!("Risky"); Box::from_raw(new_seg_ptr); 
+                                }
                             }
                         },
                         Err(_) => { Box::from_raw(new_seg_ptr); }
@@ -176,6 +180,19 @@ impl<T: Send> SegQueue<T> {
     }
 }
 
+impl<T: Send> Drop for SegQueue<T> {
+    fn drop(&mut self) {
+        let mut current = self.head.load(Relaxed);
+        while !current.is_null() {
+            unsafe {
+                let next = (*current).next.load(Relaxed);
+                Box::from_raw(current);
+                current = next;
+            }
+        } 
+    }
+}
+
 struct Segment<T: Send> {
     cells: Vec<AtomicMarkablePtr<T>>,
     next: AtomicPtr<Segment<T>>
@@ -196,7 +213,6 @@ impl<T: Send> Segment<T> {
     fn get_cells_from_ptr<'a>(ptr: *mut Segment<T>) -> &'a Vec<AtomicMarkablePtr<T>> {
         unsafe { &(*ptr).cells }
     }
-
 }
 
 mod tests {
@@ -217,7 +233,7 @@ mod tests {
                 for i in 0..10000 {
                     queue_copy.enqueue(i);
                 }
-                //println!("Push thread {} complete", i);
+                println!("Push thread {} complete", thread_no);
             }));
             queue_copy = queue.clone();
             waitvec.push(thread::spawn(move || {
@@ -237,13 +253,13 @@ mod tests {
                         }
                     }
                 }
-                println!("Pop thread {} complete", thread_no);
+                //println!("Pop thread {} complete", thread_no);
             }));
         }
-
+        
         for handle in waitvec {
             match handle.join() {
-                Ok(_) => {},
+                Ok(some) => {println!("joined {:?}", some)},
                 Err(some) => println!("Couldn't join! {:?}", some) 
             }
         }

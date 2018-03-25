@@ -25,6 +25,7 @@ pub struct AtomicMarkablePtr<T: Send> {
 
 impl <T: Send> AtomicMarkablePtr<T> {
     pub fn get_ptr(&self) -> Option<*mut T> {
+        //println!("{:?}", self.ptr);
         let ptr = self.ptr.load(Acquire);
         if ptr.is_null() { None } else { Some(ptr) }
     }
@@ -43,6 +44,15 @@ impl<T: Send> Default for AtomicMarkablePtr<T> {
     fn default() -> Self {
         AtomicMarkablePtr {
             ptr: AtomicPtr::default()
+        }
+    }
+}
+
+impl<T: Send> Drop for AtomicMarkablePtr<T> {
+    fn drop(&mut self) {
+        let ptr = self.ptr.load(Relaxed);
+        if !is_marked(ptr) && !ptr.is_null() {
+            unsafe { Box::from_raw(ptr) };
         }
     }
 }

@@ -85,5 +85,5 @@ fn bench_equal_all(c: &mut Criterion) {
                                  vec![2, 4, 8, 16, 32, 64]);
 }
 
-criterion_group!(benches, bench_equal_all_lock, bench_equal_all);
+criterion_group!(benches, bench_equal_all);
 criterion_main!(benches);
