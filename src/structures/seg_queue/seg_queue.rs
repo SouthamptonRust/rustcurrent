@@ -2,18 +2,22 @@ use memory::HPBRManager;
 use std::sync::atomic::{AtomicPtr};
 use std::sync::atomic::Ordering::{Acquire, Release, Relaxed};
 use std::ptr;
+use std::cell::UnsafeCell;
 use super::atomic_markable::AtomicMarkablePtr;
 use super::atomic_markable;
 use rand;
-use rand::Rng;
+use rand::{Rng, XorShiftRng};
 use std::thread;
 
 pub struct SegQueue<T: Send> {
     head:AtomicPtr<Segment<T>>,
     tail: AtomicPtr<Segment<T>>,
     manager: HPBRManager<Segment<T>>,
+    rng: UnsafeCell<XorShiftRng>,
     k: usize
 }
+
+unsafe impl<T: Send> Sync for SegQueue<T> {}
 
 impl<T: Send> SegQueue<T> {
     pub fn new(k: usize) -> Self {
@@ -22,6 +26,7 @@ impl<T: Send> SegQueue<T> {
             head: AtomicPtr::new(init_node),
             tail: AtomicPtr::new(init_node),
             manager: HPBRManager::new(100, 2),
+            rng: UnsafeCell::new(rand::weak_rng()),
             k
         }
     }
@@ -47,8 +52,11 @@ impl<T: Send> SegQueue<T> {
             return Err(data)
         }
 
-        let mut rng = rand::thread_rng();
-        rng.shuffle(indices);
+        //let mut rng = rand::thread_rng();
+        //rng.shuffle(indices);
+        unsafe {
+            //(*self.rng.get()).shuffle(indices);
+        }
 
         for index in indices {
             let cell = &Segment::get_cells_from_ptr(tail)[*index];
@@ -86,8 +94,10 @@ impl<T: Send> SegQueue<T> {
             return Err(())
         }
 
-        let mut rng = rand::thread_rng();
-        rng.shuffle(indices);
+        //let mut rng = rand::thread_rng();
+        unsafe {
+            //(*self.rng.get()).shuffle(indices);
+        }
 
         let mut hasEmpty = false;
         for index in indices {
