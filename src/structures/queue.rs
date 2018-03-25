@@ -1,6 +1,8 @@
 use memory::HPBRManager;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::ptr;
+use std::thread;
+use std::time::Duration;
 
 /// A lock-free Michael-Scott queue.
 ///
@@ -58,24 +60,22 @@ impl<T: Send> Queue<T> {
         if !ptr::eq(tail, self.tail.load(Ordering::Acquire)) {
             return Err(val)
         }
+        let next = unsafe { (*tail).next.load(Ordering::Acquire) };
+
+        // Is the tail actually the end of the queue?
+        if !next.is_null() {
+            // If it isn't, try to make next the end of the queue
+            let _ = self.tail.compare_exchange(tail, next, Ordering::Release, Ordering::Relaxed);
+            return Err(val)
+        }
+
+        let node_ptr = Box::into_raw(val);
+        // Try to CAS our node onto the end of the queue
         unsafe {
-            let next = (*tail).next.load(Ordering::Acquire);
-            // Is the tail still consistent?
-            if !ptr::eq(tail, self.tail.load(Ordering::Acquire)) {
-                return Err(val)
-            }
-            // Is the tail actually the end of the queue?
-            if !next.is_null() {
-                // If it isn't, try to make next the end of the queue
-                let _ = self.tail.compare_exchange_weak(tail, next, Ordering::AcqRel, Ordering::Acquire);
-                return Err(val)
-            }
-            let node_ptr = Box::into_raw(val);
-            // Try to CAS our node onto the end of the queue
-            match (*tail).next.compare_exchange_weak(ptr::null_mut(), node_ptr, Ordering::AcqRel, Ordering::Acquire) {
+            match (*tail).next.compare_exchange(ptr::null_mut(), node_ptr, Ordering::Release, Ordering::Relaxed) {
                 Ok(_) => {
                     // Success! Set our new node to the tail
-                    let _ = self.tail.compare_exchange(tail, node_ptr, Ordering::AcqRel, Ordering::Acquire);
+                    let _ = self.tail.compare_exchange(tail, node_ptr, Ordering::Release, Ordering::Relaxed);
                     return Ok(())
                 },
                 // Failure :( try again
@@ -107,32 +107,28 @@ impl<T: Send> Queue<T> {
         if !ptr::eq(head, self.head.load(Ordering::Acquire)) {
             return Err(())
         }
+        let next = unsafe {(*head).next.load(Ordering::Acquire)};
+        self.manager.protect(next, 1);
         let tail = self.tail.load(Ordering::Acquire);
-        unsafe {
-            let next = (*head).next.load(Ordering::Acquire);
-            self.manager.protect(next, 1);
-            if !ptr::eq(head, self.head.load(Ordering::Acquire)) {
+        
+        if next.is_null() {
+            return Ok(None)
+        }
+
+        if ptr::eq(head, tail) {
+            let _ = self.tail.compare_exchange(tail, next, Ordering::Release, Ordering::Relaxed);
+            return Err(());
+        }
+
+        match self.head.compare_exchange(head, next, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => {
+                let node = unsafe { Node::replace(next) };
+                let data = node.value;
+                self.manager.retire(head, 0);
+                return Ok(data)
+            },
+            Err(_) => {
                 return Err(())
-            }
-            if next.is_null() {
-                return Ok(None)
-            }
-            // If the queue isn't empty, but head == tail, then the tail must be falling behind
-            if ptr::eq(head, tail) {
-                // Help it to catch up!
-                let _ = self.tail.compare_exchange_weak(tail, next, Ordering::AcqRel, Ordering::Acquire);
-                return Err(())
-            }
-            match self.head.compare_exchange_weak(head, next, Ordering::AcqRel, Ordering::Acquire) {
-                Ok(_) => {
-                    let node = Node::replace(next);
-                    let data = node.value;
-                    self.manager.retire(head, 0);
-                    return Ok(data)
-                },
-                Err(_) => {
-                    return Err(())
-                }
             }
         }
     }

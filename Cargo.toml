@@ -18,5 +18,9 @@ name="bench_map"
 harness=false
 
 [[bench]]
-name="bench_seg_queue"
+name="bench_seg"
+harness=false
+
+[[bench]]
+name="bench_queue"
 harness=false
