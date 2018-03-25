@@ -45,9 +45,8 @@ fn bench_queue_equal_lock(num_threads: usize) {
 fn bench_seg_queue_equal(num_threads: usize) {
     let queue: Arc<SegQueue<u32>> = Arc::new(SegQueue::new(32));
     let mut wait_vec: Vec<JoinHandle<()>> = Vec::new();
-    let num_divided = num_threads / 2;
 
-    for _ in 0..num_divided {
+    for _ in 0..num_threads / 2 {
         let queue_clone = queue.clone();
         wait_vec.push(thread::spawn(move || {
             for i in 0..10000 {
@@ -56,7 +55,7 @@ fn bench_seg_queue_equal(num_threads: usize) {
         }));
     }
 
-    for _ in 0..num_divided {
+    for _ in 0..num_threads / 2 {
         let queue_clone = queue.clone();
         wait_vec.push(thread::spawn(move || {
             for i in 0..10000 {
@@ -85,5 +84,5 @@ fn bench_equal_all(c: &mut Criterion) {
                                  vec![2, 4, 8, 16, 32, 64]);
 }
 
-criterion_group!(benches, bench_equal_all);
+criterion_group!(benches, bench_equal_all_lock, bench_equal_all);
 criterion_main!(benches);

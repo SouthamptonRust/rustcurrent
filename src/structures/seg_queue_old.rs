@@ -21,22 +21,22 @@ use rand::Rng;
 /// 
 /// If relaxed consistency is undesirable, do not set `k` to 1. Instead, use the Queue structure
 /// from the `rustcurrent` library as it is far better optimised for that scenario.
-pub struct SegQueue<T: Send> {
+pub struct SegQueueOld<T: Send> {
     head: AtomicPtr<Segment<T>>,
     tail: AtomicPtr<Segment<T>>,
     manager: HPBRManager<Segment<T>>,
     k: usize
 }
 
-impl<T: Send> SegQueue<T> {
-    /// Create a new SegQueue with a given node size.
+impl<T: Send> SegQueueOld<T> {
+    /// Create a new SegQueueOld with a given node size.
     /// # Examples
     /// ```
-    /// let queue: SegQueue<u8> = SegQueue::new(8);
+    /// let queue: SegQueueOld<u8> = SegQueueOld::new(8);
     /// ```
     pub fn new(k: usize) -> Self {
         let init_node: *mut Segment<T> = Box::into_raw(Box::new(Segment::new(k)));
-        SegQueue {
+        SegQueueOld {
             head: AtomicPtr::new(init_node),
             tail: AtomicPtr::new(init_node),
             manager: HPBRManager::new(100, 3),
@@ -47,7 +47,7 @@ impl<T: Send> SegQueue<T> {
     /// Enqueue the given data.
     /// # Examples
     /// ```
-    /// let queue: SegQueue<u8> = SegQueue::new(8);
+    /// let queue: SegQueueOld<u8> = SegQueueOld::new(8);
     /// queue.enqueue(8);
     /// ``` 
     pub fn enqueue(&self, data: T) {
@@ -158,7 +158,7 @@ impl<T: Send> SegQueue<T> {
     /// the front segment is empty, it will be dequeued.
     /// # Examples
     /// ```
-    /// let queue: SegQueue<u8> = SegQueue::new(8);
+    /// let queue: SegQueueOld<u8> = SegQueueOld::new(8);
     /// queue.enqueue(8);
     /// assert_eq!(queue.dequeue(), Some(8));
     /// ```
@@ -306,7 +306,7 @@ impl<T: Send> SegQueue<T> {
     }
 }
 
-impl<T: Send> Drop for SegQueue<T> {
+impl<T: Send> Drop for SegQueueOld<T> {
     fn drop(&mut self) {
         let mut current = self.head.load(Ordering::Relaxed);
         while !current.is_null() {
@@ -319,7 +319,7 @@ impl<T: Send> Drop for SegQueue<T> {
     }
 }
 
-impl<T: Send + Debug> Debug for SegQueue<T> {
+impl<T: Send + Debug> Debug for SegQueueOld<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut start_ptr = self.head.load(Ordering::Relaxed);
         let mut node_string = "[".to_owned();
@@ -330,7 +330,7 @@ impl<T: Send + Debug> Debug for SegQueue<T> {
             }
         }
         node_string += "]";
-        write!(f, "SegQueue{{ {} }}", node_string)
+        write!(f, "SegQueueOld{{ {} }}", node_string)
     }
 }
 
@@ -433,7 +433,7 @@ pub fn mark<T>(ptr: *mut T) -> *mut T {
 
 mod tests {
     #![allow(unused_imports)]
-    use super::SegQueue;
+    use super::SegQueueOld;
     use std::collections::HashSet;
     use std::sync::Arc;
     use std::thread;
@@ -441,7 +441,7 @@ mod tests {
     #[test]
     #[ignore]
     fn test_enqueue() {
-        let queue: SegQueue<u8> = SegQueue::new(4);
+        let queue: SegQueueOld<u8> = SegQueueOld::new(4);
 
         let mut poss_set: HashSet<u8> = HashSet::new();
 
@@ -485,7 +485,7 @@ mod tests {
     #[test]
     #[ignore]
     fn test_with_contention() {
-        let mut queue: Arc<SegQueue<u16>> = Arc::new(SegQueue::new(20));
+        let mut queue: Arc<SegQueueOld<u16>> = Arc::new(SegQueueOld::new(20));
         
         let mut waitvec: Vec<thread::JoinHandle<()>> = Vec::new();
 

@@ -127,7 +127,7 @@ impl<T: Send> SegQueue<T> {
         }
 
         // How do we tell if the queue is empty?
-        if ptr::eq(head, self.tail.load(Acquire)) {
+        if ptr::eq(head, self.tail.load(Acquire)) || hasEmpty {
             // Must be the last node, because there are empty slots
             // If we reach the end and there are empty spots, we return None
             return Ok(None)
