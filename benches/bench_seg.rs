@@ -74,6 +74,134 @@ fn bench_seg_queue_equal(num_threads: usize) {
     }
 }
 
+fn bench_sp_mc_lock(num_threads: usize) {
+    let queue: Arc<Mutex<VecDeque<u32>>> = Arc::default();
+    let mut wait_vec: Vec<JoinHandle<()>> = Vec::new();
+
+    for _ in 0..1 {
+        let queue_clone = queue.clone();
+        wait_vec.push(thread::spawn(move || {
+            for i in 0..(10000 * (num_threads - 1)) {
+                queue_clone.lock().unwrap().push_back(i as u32);
+            }
+        }));
+    }
+
+    for _ in 0..num_threads - 1 {
+        let queue_clone = queue.clone();
+        wait_vec.push(thread::spawn(move || {
+            for i in 0..10000 {
+                loop {
+                    match queue_clone.lock().unwrap().pop_front() {
+                        Some(i) => {break;},
+                        None => {}
+                    }
+                }
+            }
+        }))
+    }
+
+    for handle in wait_vec {
+        handle.join().unwrap();
+    }
+}
+
+fn bench_sp_mc(num_threads: usize) {
+    let queue: Arc<SegQueue<u32>> = Arc::new(SegQueue::new(32));
+    let mut wait_vec: Vec<JoinHandle<()>> = Vec::new();
+
+    for _ in 0..1 {
+        let queue_clone = queue.clone();
+        wait_vec.push(thread::spawn(move || {
+            for i in 0..(10000 * (num_threads - 1)) {
+                queue_clone.enqueue(i as u32);
+            }
+        }));
+    }
+
+    for _ in 0..num_threads - 1 {
+        let queue_clone = queue.clone();
+        wait_vec.push(thread::spawn(move || {
+            for i in 0..10000 {
+                loop {
+                    match queue_clone.dequeue() {
+                        Some(_) => {break;},
+                        None => {}
+                    }
+                }
+            }
+        }))
+    }
+
+    for handle in wait_vec {
+        handle.join().unwrap();
+    }
+}
+
+fn bench_mp_sc_lock(num_threads: usize) {
+    let queue: Arc<Mutex<VecDeque<u32>>> = Arc::default();
+    let mut wait_vec: Vec<JoinHandle<()>> = Vec::new();
+
+    for _ in 0..num_threads - 1 {
+        let queue_clone = queue.clone();
+        wait_vec.push(thread::spawn(move || {
+            for i in 0..10000 {
+                queue_clone.lock().unwrap().push_back(i);
+            }
+        }));
+    }
+
+    for _ in 0..1 {
+        let queue_clone = queue.clone();
+        wait_vec.push(thread::spawn(move || {
+            for i in 0..(10000 * (num_threads - 1)) {
+                loop {
+                    match queue_clone.lock().unwrap().pop_front() {
+                        Some(i) => {break;},
+                        None => {}
+                    }
+                }
+            }
+        }))
+    }
+
+    for handle in wait_vec {
+        handle.join().unwrap();
+    }
+}
+
+fn bench_mp_sc(num_threads: usize) {
+    let queue: Arc<SegQueue<u32>> = Arc::new(SegQueue::new(32));
+    let mut wait_vec: Vec<JoinHandle<()>> = Vec::new();
+
+    for _ in 0..num_threads - 1 {
+        let queue_clone = queue.clone();
+        wait_vec.push(thread::spawn(move || {
+            for i in 0..10000 {
+                queue_clone.enqueue(i);
+            }
+        }));
+    }
+
+    for _ in 0..1 {
+        let queue_clone = queue.clone();
+        wait_vec.push(thread::spawn(move || {
+            for i in 0..(10000 * (num_threads - 1)) {
+                loop {
+                    match queue_clone.dequeue() {
+                        Some(_) => {break;},
+                        None => {}
+                    }
+                }
+            }
+        }))
+    }
+
+    for handle in wait_vec {
+        handle.join().unwrap();
+    }
+}
+
 fn bench_equal_all_lock(c: &mut Criterion) {
     c.bench_function_over_inputs("seg_queue_equal", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_queue_equal_lock(*num_threads)),
                                  vec![2, 4, 8, 16, 32, 64]);
@@ -81,6 +209,26 @@ fn bench_equal_all_lock(c: &mut Criterion) {
 
 fn bench_equal_all(c: &mut Criterion) {
     c.bench_function_over_inputs("seg_queue_equal", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_seg_queue_equal(*num_threads)),
+                                 vec![2, 4, 8, 16, 32, 64]);
+}
+
+fn bench_mp_sc_all_lock(c: &mut Criterion) {
+    c.bench_function_over_inputs("seg_queue_mp_sc", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_mp_sc_lock(*num_threads)), 
+                                 vec![2, 4, 8, 16, 32, 64]);
+}
+
+fn bench_mp_sc_all(c: &mut Criterion) {
+    c.bench_function_over_inputs("seg_queue_mp_sc", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_mp_sc(*num_threads)), 
+                                 vec![2, 4, 8, 16, 32, 64]);
+}
+
+fn bench_sp_mc_all_lock(c: &mut Criterion) {
+    c.bench_function_over_inputs("seg_queue_sp_mc", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_sp_mc_lock(*num_threads)), 
+                                 vec![2, 4, 8, 16, 32, 64]);
+}
+
+fn bench_sp_mc_all(c: &mut Criterion) {
+    c.bench_function_over_inputs("seg_queue_sp_mc", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_sp_mc(*num_threads)), 
                                  vec![2, 4, 8, 16, 32, 64]);
 }
 
