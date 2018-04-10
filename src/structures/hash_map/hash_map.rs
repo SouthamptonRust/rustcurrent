@@ -854,6 +854,22 @@ mod tests {
     use std::thread::JoinHandle;
 
     #[test]
+    fn test_data_guard() {
+        let map: HashMap<u8, u8> = HashMap::new();
+
+        let _ = map.insert(23, 23);
+        match map.get(&23) {
+            Some(g) => {
+                assert_eq!(*g, 23);
+                assert_eq!(g.cloned(), 23);
+            },
+            None => {}
+        }
+
+        map.insert(24, 24);
+    }
+
+    #[test]
     #[ignore]
     fn test_single_thread_semantics() {
         let map : HashMap<u8, u8> = HashMap::new();
@@ -868,12 +884,12 @@ mod tests {
             }
         }
         
-        assert_eq!(map.get(&3), Some(&3));
+        assert_eq!(*map.get(&3).unwrap(), 3);
         assert_eq!(map.get(&250), None);
 
         assert_eq!(map.update(&3, &3, 7), Ok(()));
         assert_eq!(map.update(&239, &239, 7), Ok(()));
-        assert_eq!(map.get(&3), Some(&7));
+        assert_eq!(*map.get(&3).unwrap(), 7);
 
         println!("{:?}", map);
 
@@ -884,17 +900,16 @@ mod tests {
         assert_eq!(map.get(&3), None);
     }
 
-    #[ignore]
     #[test]
+    #[ignore]
     fn test_borrow_string_map() {
         let map: HashMap<String, u16> = HashMap::new();
         let _ = map.insert("hello".to_owned(), 8);
         assert_eq!(map.get_clone("hello"), Some(8));
-        assert_eq!(map.get("hello"), Some(&8));
+        assert_eq!(*map.get("hello").unwrap(), 8);
         assert_eq!(map.remove("hello", &8), Some(8));
     }
 
-    #[ignore]
     #[test]
     fn test_multithreaded_insert() {
         let map: Arc<HashMap<u16, String>> = Arc::new(HashMap::new());
@@ -913,7 +928,7 @@ mod tests {
                             match expected {
                                 Some(expected_value) => {
                                     ////println!("updating");
-                                    let _ = map_clone.update(&key, expected_value, value);
+                                    let _ = map_clone.update(&key, &*expected_value, value);
                                 },
                                 None => {}
                             }
@@ -933,8 +948,6 @@ mod tests {
         //println!("{:?}", map.get(&1174));
     }
 
-    #[test]
-    #[ignore]
     fn test_typical() {
         let map: Arc<HashMap<u32, u32>> = Arc::default();
         let mut wait_vec: Vec<JoinHandle<()>> = Vec::new();
@@ -970,8 +983,8 @@ mod tests {
                 }
                 //println!("done inserting");
                 for i in 0..1000 {
-                    if (i > 300 && i < 800) {
-                        assert_eq!(map_clone.get(&i), Some(&i));
+                    if i > 300 && i < 800 {
+                        assert_eq!(*map_clone.get(&i).unwrap(), i);
                     }
                 }
                 //println!("done normal get");

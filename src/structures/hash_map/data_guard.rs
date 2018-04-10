@@ -1,5 +1,7 @@
 use memory::{HPHandle};
 use std::ops::Deref;
+use std::fmt::Debug;
+use std::fmt;
 
 pub struct DataGuard<'a, T: Send + 'a, N: Send + 'a> {
     data: &'a T,
@@ -29,5 +31,17 @@ impl<'a, T: Send + 'a, N: Send> Deref for DataGuard<'a, T, N> {
     type Target = T;
     fn deref(&self) -> &T {
         self.data
+    }
+}
+
+impl<'a, T: Debug + Send + 'a, N: Send> Debug for DataGuard<'a, T, N> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "DataGuard({:?})", self.data)
+    }
+}
+
+impl<'a, T: Debug + Send + PartialEq + 'a, N: Send> PartialEq for DataGuard<'a, T, N> {
+    fn eq(&self, other: &Self) -> bool {
+        self.data == other.data
     }
 }
