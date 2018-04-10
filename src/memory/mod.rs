@@ -6,4 +6,5 @@
 //! prevent the [ABA problem](https://en.wikipedia.org/wiki/ABA_problem).
 
 pub use self::hazardpointers::HPBRManager;
+pub use self::hazardpointers::HPHandle;
 mod hazardpointers;

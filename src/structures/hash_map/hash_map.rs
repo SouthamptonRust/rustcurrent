@@ -8,6 +8,7 @@ use std::collections::hash_map::RandomState;
 use memory::HPBRManager;
 use super::atomic_markable::{AtomicMarkablePtr, Node, DataNode, ArrayNode};
 use super::atomic_markable;
+use super::data_guard::DataGuard;
 
 const HEAD_SIZE: usize = 256;
 const CHILD_SIZE: usize = 16;
