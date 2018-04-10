@@ -251,7 +251,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
     /// map.insert("hello".to_owned(), 8);
     /// assert_eq!(map.get("hello"), Some(&8));
     /// ``` 
-    pub fn get<Q: ?Sized>(&self, key: &Q) -> Option<&V>
+    pub fn get<Q: ?Sized>(&self, key: &Q) -> Option<DataGuard<V, Node<K, V>>>
     where K: Borrow<Q>,
           Q: Eq + Hash + Send  
     {
@@ -314,7 +314,8 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                         }
                         let data_node = self.get_data_node(node_ptr);
                         if data_node.key == hash {
-                            return data_node.value.as_ref();
+                            let hp_handle = self.manager.protect_dynamic(node_ptr);
+                            return Some(DataGuard::new(data_node.value.as_ref().unwrap(), hp_handle));
                         } else {
                             return None
                         }
@@ -331,7 +332,8 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                 match &*node_ptr {
                     &Node::Array(_) => panic!("Unexpected array node!"),
                     &Node::Data(ref data_node) => {
-                        return data_node.value.as_ref()
+                        let hp_handle = self.manager.protect_dynamic(node_ptr);
+                        return Some(DataGuard::new(data_node.value.as_ref().unwrap(), hp_handle));
                     }
                 }
             }
