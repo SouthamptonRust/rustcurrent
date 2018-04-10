@@ -72,7 +72,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
             hasher: RandomState::new(),
             head_size: HEAD_SIZE,
             shift_step: f64::floor((CHILD_SIZE as f64).log2()) as usize,
-            manager: HPBRManager::new(100, 4)
+            manager: HPBRManager::new(100, 1)
         }   
     }
 
@@ -92,7 +92,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
         // We know this node must exist
         //println!("expanding: {:?} at {:?}", bucket, pos);
         let node = bucket[pos].get_ptr().unwrap();
-        self.manager.protect(atomic_markable::unmark(node), 3);
+        self.manager.protect(atomic_markable::unmark(node), 0);
         if atomic_markable::is_array_node(node) {
             //println!("already expanded: {:b}", node as usize);
             return node
@@ -408,7 +408,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                         r += self.shift_step;
                         continue;
                     } else {
-                        self.manager.protect(atomic_markable::unmark(node_ptr), 1);
+                        self.manager.protect(atomic_markable::unmark(node_ptr), 0);
                         if node != bucket[pos].get_ptr() {
                             let mut fail_count = 0;
                             while node != bucket[pos].get_ptr() {
@@ -416,7 +416,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                                 match node {
                                     None => { return Err(new); },
                                     Some(new_ptr) => {
-                                        self.manager.protect(atomic_markable::unmark(atomic_markable::unmark_array_node(new_ptr)), 1);
+                                        self.manager.protect(atomic_markable::unmark(atomic_markable::unmark_array_node(new_ptr)), 0);
                                         fail_count += 1;
                                         if fail_count > MAX_FAILURES {
                                             bucket[pos].mark();
@@ -446,7 +446,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                             }
                             new = match self.try_update(&bucket[pos], node_ptr, hash, new) {
                                 Ok(()) => { 
-                                    self.manager.retire(node_ptr, 1);
+                                    self.manager.retire(node_ptr, 0);
                                     return Ok(()) 
                                 },
                                 Err((value, current_ptr)) => {
@@ -482,7 +482,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                 if data_node.value.as_ref() == Some(expected) {
                     match self.try_update(&bucket[pos], node_ptr, hash, new) {
                         Ok(()) => {
-                            self.manager.retire(node_ptr, 1);
+                            self.manager.retire(node_ptr, 0);
                             Ok(())
                         },
                         Err((value, _)) => {
@@ -550,7 +550,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                     } else if atomic_markable::is_marked(node_ptr) {
                         bucket = HashMap::get_bucket(self.expand_map(bucket, pos, r));
                     } else {
-                        self.manager.protect(atomic_markable::unmark(node_ptr), 2);
+                        self.manager.protect(atomic_markable::unmark(node_ptr), 0);
                         if node != bucket[pos].get_ptr() {
                             let mut fail_count = 0;
                             while node != bucket[pos].get_ptr() {
@@ -558,7 +558,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                                 match node {
                                     None => { return None; },
                                     Some(new_ptr) => {
-                                        self.manager.protect(atomic_markable::unmark(atomic_markable::unmark_array_node(new_ptr)), 2);
+                                        self.manager.protect(atomic_markable::unmark(atomic_markable::unmark_array_node(new_ptr)), 0);
                                         fail_count += 1;
                                         if fail_count > MAX_FAILURES {
                                             bucket[pos].mark();
@@ -594,7 +594,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                                         let owned_node = ptr::replace(node_ptr, Node::Data(DataNode::default()));
                                         if let Node::Data(node) = owned_node {
                                             let data = node.value;
-                                            self.manager.retire(node_ptr, 2);
+                                            self.manager.retire(node_ptr, 0);
                                             return data;
                                         } else {
                                             panic!("Unexpected array node!");
@@ -636,7 +636,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                                 let owned_node = ptr::replace(node_ptr, Node::Data(DataNode::default()));
                                 if let Node::Data(node) = owned_node {
                                     let data = node.value;
-                                    self.manager.retire(node_ptr, 2);
+                                    self.manager.retire(node_ptr, 0);
                                     data
                                 } else {
                                     panic!("Unexpected array node!");
@@ -862,11 +862,13 @@ mod tests {
             Some(g) => {
                 assert_eq!(*g, 23);
                 assert_eq!(g.cloned(), 23);
+                println!("guard leaving scope");
             },
             None => {}
         }
-
-        map.insert(24, 24);
+        println!("guard left scope");
+        let _ = map.insert(24, 24);
+        let _ = map.insert(25, 25);
     }
 
     #[test]
@@ -911,6 +913,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_multithreaded_insert() {
         let map: Arc<HashMap<u16, String>> = Arc::new(HashMap::new());
         let mut wait_vec: Vec<thread::JoinHandle<()>> = Vec::new();

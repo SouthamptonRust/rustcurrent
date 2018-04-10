@@ -232,6 +232,7 @@ mod tests {
     use std::thread;
 
     #[test]
+    #[ignore]
     fn test_with_contention() {
         let mut queue: Arc<SegQueue<u16>> = Arc::new(SegQueue::new(20));
         
