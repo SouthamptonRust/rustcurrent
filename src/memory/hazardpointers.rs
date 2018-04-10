@@ -172,6 +172,32 @@ impl<'a, T: Send> HPBRManager<T> {
             thread_info_mut.get_mut_hazard_pointer(hazard_num).unprotect();
         }
     }
+    
+    pub fn protect_dynamic(&'a self, record: *mut T) -> HPHandle<'a, T> {
+        unsafe {
+            let thread_info_mut = self.get_mut_thread_info();
+            for i in thread_info_mut.starting_hazards_num..thread_info_mut.local_hazards.len() {
+                let hp = thread_info_mut.get_mut_hazard_pointer(i);
+                match hp.protected {
+                    None => {
+                        hp.protect(record);
+                        return HPHandle::new(i, self)
+                    },
+                    Some(_) => {}
+                }
+            }
+            let new_hp = self.allocate_hp();
+            let new_hp_index = thread_info_mut.add_dynamic_hazard_pointer(new_hp);
+            HPHandle::new(new_hp_index, self)
+        }
+    }
+
+    fn unprotect_dynamic(&self, hp_index: usize) {
+        unsafe {
+            let thread_info_mut = self.get_mut_thread_info();
+            thread_info_mut.get_mut_hazard_pointer(hp_index).unprotect();
+        }
+    }
 
     /// This function is provided for use in data structure destructors. If somehow
     /// there is data in both a retired list and still accessible from a data structure as
@@ -257,11 +283,32 @@ impl<'a, T: Send> HPBRManager<T> {
     }
 }
 
+pub struct HPHandle<'a, T: 'a + Send> {
+    index: usize,
+    manager: &'a HPBRManager<T>
+}
+
+impl<'a, T: Send> HPHandle<'a, T> {
+    fn new(index: usize, manager: &'a HPBRManager<T>) -> HPHandle<'a, T> {
+        HPHandle {
+            index,
+            manager
+        }
+    }
+}
+
+impl<'a, T: Send> Drop for HPHandle<'a, T> {
+    fn drop(&mut self) {
+        self.manager.unprotect_dynamic(self.index);
+    }
+}
+
 struct HazardPointer<T: Send> {
     protected: Option<*mut T>,
     next: AtomicPtr<HazardPointer<T>>,
     active: AtomicBool
 }
+
 
 impl<T: Send> Drop for HazardPointer<T> {
     fn drop(&mut self) {
@@ -313,20 +360,28 @@ unsafe impl<T: Send> Send for ThreadLocalInfo<T> {}
 struct ThreadLocalInfo<T: Send> {
     local_hazards: Vec<*mut HazardPointer<T>>,
     retired_list: Box<VecDeque<*mut T>>,
-    retired_number: usize
+    retired_number: usize,
+    starting_hazards_num: usize
 }
 
 impl<T: Send> ThreadLocalInfo<T> {
     fn new(starting_hazards: Vec<*mut HazardPointer<T>>) -> Self {
+        let starting_hazards_num = starting_hazards.len(); 
         ThreadLocalInfo {
             local_hazards: starting_hazards,
             retired_list: Box::new(VecDeque::new()),
-            retired_number: 0
+            retired_number: 0,
+            starting_hazards_num
         }
     }
 
     unsafe fn get_mut_hazard_pointer(&mut self, hazard_index: usize) -> &mut HazardPointer<T> {
         &mut *self.local_hazards[hazard_index]
+    }
+
+    fn add_dynamic_hazard_pointer(&mut self, hazard_pointer: *mut HazardPointer<T>) -> usize {
+        self.local_hazards.push(hazard_pointer);
+        self.local_hazards.len() - 1
     }
 }
 

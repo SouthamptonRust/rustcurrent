@@ -232,5 +232,6 @@ fn bench_sp_mc_all(c: &mut Criterion) {
                                  vec![2, 4, 8, 16, 32, 64]);
 }
 
-criterion_group!(benches, bench_equal_all_lock, bench_equal_all);
+criterion_group!(benches, bench_equal_all_lock, bench_equal_all, bench_mp_sc_all_lock, bench_mp_sc_all,
+                          bench_sp_mc_all_lock, bench_sp_mc_all);
 criterion_main!(benches);
