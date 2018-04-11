@@ -148,7 +148,7 @@ impl<'a, T: Send> HPBRManager<T> {
     /// ```
     pub fn protect(&self, record: *mut T, hazard_num: usize) {
         unsafe {
-            atomic::fence(Ordering::Release);
+            //atomic::fence(Ordering::Release);
             let thread_info_mut = self.get_mut_thread_info();
             thread_info_mut.get_mut_hazard_pointer(hazard_num).protect(record);
         }
