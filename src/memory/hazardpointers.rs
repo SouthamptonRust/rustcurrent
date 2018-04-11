@@ -192,6 +192,16 @@ impl<'a, T: Send> HPBRManager<T> {
         }
     }
 
+    pub fn retire_dynamic(&self, hp_handle: HPHandle<T>) {
+        unsafe {
+            let thread_info_mut = self.get_mut_thread_info();
+            let hp = thread_info_mut.get_mut_hazard_pointer(hp_handle.index);
+            if let Some(ptr) = hp.protected {
+                self.retire(ptr, hp_handle.index);
+            }
+        }
+    }
+
     fn unprotect_dynamic(&self, hp_index: usize) {
         unsafe {
             let thread_info_mut = self.get_mut_thread_info();
