@@ -25,7 +25,6 @@ pub struct AtomicMarkablePtr<T: Send> {
 
 impl <T: Send> AtomicMarkablePtr<T> {
     pub fn get_ptr(&self) -> Option<*mut T> {
-        //println!("{:?}", self.ptr);
         let ptr = self.ptr.load(Acquire);
         if ptr.is_null() { None } else { Some(ptr) }
     }

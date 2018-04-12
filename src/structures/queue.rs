@@ -3,6 +3,8 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 use std::ptr;
 use std::thread;
 use std::time::Duration;
+use rand::{SmallRng, NewRng, Rng};
+use std::cell::UnsafeCell;
 
 /// A lock-free Michael-Scott queue.
 ///
@@ -13,7 +15,8 @@ use std::time::Duration;
 pub struct Queue<T: Send> {
     head: AtomicPtr<Node<T>>,
     tail: AtomicPtr<Node<T>>,
-    manager: HPBRManager<Node<T>>
+    manager: HPBRManager<Node<T>>,
+    rng: UnsafeCell<SmallRng>
 }
 
 #[derive(Debug)]
@@ -33,8 +36,18 @@ impl<T: Send> Queue<T> {
         Queue {
             head: AtomicPtr::new(dummy_node),
             tail: AtomicPtr::new(dummy_node),
-            manager: HPBRManager::new(100, 2)
+            manager: HPBRManager::new(100, 2),
+            rng: UnsafeCell::new(SmallRng::new())
         }
+    }
+    
+    fn backoff(&self, max_backoff: u32) -> u32 {
+        unsafe {
+            let rng = &mut *self.rng.get();
+            let backoff_time = rng.gen_range(0, max_backoff);
+            thread::sleep(Duration::new(0, backoff_time * 1000));    
+        }
+        max_backoff * 2
     }
 
     /// Add a new element to the back of the queue.
@@ -44,12 +57,14 @@ impl<T: Send> Queue<T> {
     /// queue.enqueue("hello".to_owned());
     /// ```
     pub fn enqueue(&self, val: T) {
+        let mut backoff = 1;
         let mut node = Box::new(Node::new(val));
         loop {
             node = match self.try_enqueue(node) {
                 Ok(_) => { return; },
                 Err(old_node) => old_node
-            }
+            };
+            backoff = self.backoff(backoff);
         }
     }
 
@@ -94,10 +109,12 @@ impl<T: Send> Queue<T> {
     /// assert_eq!(queue.dequeue(), Some("hello".to_owned()));
     /// ```
     pub fn dequeue(&self) -> Option<T> {
+        let mut backoff = 1;
         loop {
             if let Ok(val) = self.try_dequeue() {
                 return val
             }
+            backoff = self.backoff(backoff);
         }
     }
 
