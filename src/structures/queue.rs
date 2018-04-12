@@ -19,6 +19,8 @@ pub struct Queue<T: Send> {
     rng: UnsafeCell<SmallRng>
 }
 
+unsafe impl<T: Send> Sync for Queue<T> {}
+
 #[derive(Debug)]
 struct Node<T: Send> {
     next: AtomicPtr<Node<T>>,
@@ -124,8 +126,13 @@ impl<T: Send> Queue<T> {
         if !ptr::eq(head, self.head.load(Ordering::Acquire)) {
             return Err(())
         }
+
         let next = unsafe {(*head).next.load(Ordering::Acquire)};
         self.manager.protect(next, 1);
+        if !ptr::eq(next, unsafe { (*head).next.load(Ordering::Acquire) }) {
+            return Err(())
+        }
+
         let tail = self.tail.load(Ordering::Acquire);
         
         if next.is_null() {
@@ -139,7 +146,7 @@ impl<T: Send> Queue<T> {
 
         match self.head.compare_exchange(head, next, Ordering::AcqRel, Ordering::Acquire) {
             Ok(_) => {
-                let node = unsafe { Node::replace(next) };
+                let node = unsafe { ptr::read(next) };
                 let data = node.value;
                 self.manager.retire(head, 0);
                 return Ok(data)
