@@ -19,6 +19,9 @@ unsafe impl<T: Send> Sync for SegQueue<T> {}
 
 impl<T: Send> SegQueue<T> {
     pub fn new(k: usize) -> Self {
+        if k > 0 || k & (k - 1) == 0 {
+            panic!("k must be a positive power of 2!");
+        }
         let init_node = Box::into_raw(Box::new(Segment::new(k)));
         SegQueue {
             head: AtomicPtr::new(init_node),
@@ -48,14 +51,10 @@ impl<T: Send> SegQueue<T> {
             return Err(data)
         }
 
-        //let mut rng = rand::thread_rng();
-        //rng.shuffle(indices);
-        unsafe {
-            //(*self.rng.get()).shuffle(indices);
-        }
         let rand: usize = unsafe { (*self.rng.get()).gen() };
         let permutation_start = rand & (self.k - 1);
         let permutation = OrderGenerator::new(permutation_start, self.k);
+
         for index in permutation.iter() {
             let cell = &Segment::get_cells_from_ptr(tail)[index];
             data = match cell.get_ptr() {
@@ -90,15 +89,11 @@ impl<T: Send> SegQueue<T> {
             return Err(())
         }
 
-        //let mut rng = rand::thread_rng();
-        unsafe {
-            // We do not need a secure random permutation, we can simply pick a random start point
-            //(*self.rng.get()).shuffle(indices);
-        }
         let rand: usize = unsafe { (*self.rng.get()).gen() };
         let permutation_start = rand & (self.k - 1);
         let permutation = OrderGenerator::new(permutation_start, self.k);
-        let mut hasEmpty = false;
+
+        let mut has_empty = false;
         for index in permutation.iter() {
             let cell = &Segment::get_cells_from_ptr(head)[index];
             match cell.get_ptr() {
@@ -120,13 +115,13 @@ impl<T: Send> SegQueue<T> {
                     }
                 },
                 None => {
-                    hasEmpty = true;
+                    has_empty = true;
                 }
             }
         }
 
         // How do we tell if the queue is empty?
-        if ptr::eq(head, self.tail.load(Acquire)) || hasEmpty {
+        if ptr::eq(head, self.tail.load(Acquire)) || has_empty {
             // Must be the last node, because there are empty slots
             // If we reach the end and there are empty spots, we return None
             return Ok(None)
@@ -148,8 +143,7 @@ impl<T: Send> SegQueue<T> {
                         Ok(_) => {
                             match self.tail.compare_exchange(tail_old, new_seg_ptr, Release, Relaxed) {
                                 Ok(_) => {},
-                                Err(_) => { //println!("Risky"); Box::from_raw(new_seg_ptr); 
-                                }
+                                Err(_) => {-}
                             }
                         },
                         Err(_) => { Box::from_raw(new_seg_ptr); }
