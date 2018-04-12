@@ -5,9 +5,7 @@ use std::ptr;
 use std::cell::UnsafeCell;
 use super::atomic_markable::AtomicMarkablePtr;
 use super::atomic_markable;
-use rand;
-use rand::{Rng, SmallRng, NewRng, SeedableRng};
-use std::thread;
+use rand::{Rng, SmallRng, NewRng};
 
 pub struct SegQueue<T: Send> {
     head:AtomicPtr<Segment<T>>,
@@ -32,18 +30,16 @@ impl<T: Send> SegQueue<T> {
     }
 
     pub fn enqueue(&self, data: T) {
-        let mut vec: Vec<usize> = (0..self.k).collect();
-        let vals = vec.as_mut_slice();
         let mut data_box = Box::new(data);
         loop {
-            data_box = match self.try_enqueue(data_box, vals) {
+            data_box = match self.try_enqueue(data_box) {
                 Ok(()) => { return; },
                 Err(val) => val
             };
         }
     }
 
-    fn try_enqueue(&self, mut data: Box<T>, indices: &mut[usize]) -> Result<(), Box<T>> {
+    fn try_enqueue(&self, mut data: Box<T>) -> Result<(), Box<T>> {
         let tail = self.tail.load(Acquire);
         self.manager.protect(tail, 0);
 
@@ -57,8 +53,9 @@ impl<T: Send> SegQueue<T> {
         unsafe {
             //(*self.rng.get()).shuffle(indices);
         }
-        let permutation = OrderGenerator::new(self.k);
-
+        let rand: usize = unsafe { (*self.rng.get()).gen() };
+        let permutation_start = rand & (self.k - 1);
+        let permutation = OrderGenerator::new(permutation_start, self.k);
         for index in permutation.iter() {
             let cell = &Segment::get_cells_from_ptr(tail)[index];
             data = match cell.get_ptr() {
@@ -79,16 +76,14 @@ impl<T: Send> SegQueue<T> {
     }
 
     pub fn dequeue(&self) -> Option<T> {
-        let mut vec: Vec<usize> = (0..self.k).collect();
-        let vals = vec.as_mut_slice();
         loop {
-            if let Ok(val) = self.try_dequeue(vals) {
+            if let Ok(val) = self.try_dequeue() {
                 return val
             }
         }
     }
 
-    fn try_dequeue(&self, indices: &mut[usize]) -> Result<Option<T>, ()> {
+    fn try_dequeue(&self) -> Result<Option<T>, ()> {
         let head = self.head.load(Acquire);
         self.manager.protect(head, 0);
         if !ptr::eq(head, self.head.load(Acquire)) {
@@ -100,7 +95,9 @@ impl<T: Send> SegQueue<T> {
             // We do not need a secure random permutation, we can simply pick a random start point
             //(*self.rng.get()).shuffle(indices);
         }
-        let permutation = OrderGenerator::new(self.k);
+        let rand: usize = unsafe { (*self.rng.get()).gen() };
+        let permutation_start = rand & (self.k - 1);
+        let permutation = OrderGenerator::new(permutation_start, self.k);
         let mut hasEmpty = false;
         for index in permutation.iter() {
             let cell = &Segment::get_cells_from_ptr(head)[index];
@@ -228,20 +225,14 @@ impl<T: Send> Segment<T> {
 }
 
 struct OrderGenerator {
-    rng: SmallRng,
-    current: usize,
+    start: usize,
     size: usize
 }
 
 impl OrderGenerator {
-    fn new(size: usize) -> OrderGenerator {
-        let mut rng = SmallRng::from_rng(&mut rand::thread_rng()).unwrap();
-        //let mut rng = SmallRng::new();
-        let rand: usize = rng.gen();
-        let current = rand & (size - 1);
+    fn new(start: usize, size: usize) -> OrderGenerator {
         OrderGenerator {
-            rng,
-            current,
+            start,
             size
         }
     }
@@ -249,8 +240,8 @@ impl OrderGenerator {
     fn iter(&self) -> OrderGeneratorIterator {
         OrderGeneratorIterator {
             generator: self,
-            current: self.current,
-            start: self.current,
+            current: self.start,
+            start: self.start,
             bitmask: self.size - 1,
             started: false
         }
@@ -286,7 +277,7 @@ mod tests {
     
     #[test]
     fn test_single_threaded() {
-        let gen = OrderGenerator::new(32);
+        let gen = OrderGenerator::new(12, 32);
 
         for index in gen.iter() {
             println!("{}", index);
