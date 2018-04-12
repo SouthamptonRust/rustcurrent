@@ -854,6 +854,7 @@ mod tests {
     use std::thread::JoinHandle;
 
     #[test]
+    #[ignore]
     fn test_data_guard() {
         let map: HashMap<u8, u8> = HashMap::new();
 
@@ -913,6 +914,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_multithreaded_insert() {
         let map: Arc<HashMap<u16, String>> = Arc::new(HashMap::new());
         let mut wait_vec: Vec<thread::JoinHandle<()>> = Vec::new();

@@ -6,14 +6,14 @@ use std::cell::UnsafeCell;
 use super::atomic_markable::AtomicMarkablePtr;
 use super::atomic_markable;
 use rand;
-use rand::{Rng, XorShiftRng};
+use rand::{Rng, SmallRng, NewRng, SeedableRng};
 use std::thread;
 
 pub struct SegQueue<T: Send> {
     head:AtomicPtr<Segment<T>>,
     tail: AtomicPtr<Segment<T>>,
     manager: HPBRManager<Segment<T>>,
-    rng: UnsafeCell<XorShiftRng>,
+    rng: UnsafeCell<SmallRng>,
     k: usize
 }
 
@@ -26,7 +26,7 @@ impl<T: Send> SegQueue<T> {
             head: AtomicPtr::new(init_node),
             tail: AtomicPtr::new(init_node),
             manager: HPBRManager::new(100, 2),
-            rng: UnsafeCell::new(rand::weak_rng()),
+            rng: UnsafeCell::new(SmallRng::new()),
             k
         }
     }
@@ -57,9 +57,10 @@ impl<T: Send> SegQueue<T> {
         unsafe {
             //(*self.rng.get()).shuffle(indices);
         }
+        let permutation = OrderGenerator::new(self.k);
 
-        for index in indices {
-            let cell = &Segment::get_cells_from_ptr(tail)[*index];
+        for index in permutation.iter() {
+            let cell = &Segment::get_cells_from_ptr(tail)[index];
             data = match cell.get_ptr() {
                 None => {
                     let item_ptr = Box::into_raw(data);
@@ -96,12 +97,13 @@ impl<T: Send> SegQueue<T> {
 
         //let mut rng = rand::thread_rng();
         unsafe {
+            // We do not need a secure random permutation, we can simply pick a random start point
             //(*self.rng.get()).shuffle(indices);
         }
-
+        let permutation = OrderGenerator::new(self.k);
         let mut hasEmpty = false;
-        for index in indices {
-            let cell = &Segment::get_cells_from_ptr(head)[*index];
+        for index in permutation.iter() {
+            let cell = &Segment::get_cells_from_ptr(head)[index];
             match cell.get_ptr() {
                 Some(item_ptr) => {
                     if !atomic_markable::is_marked(item_ptr) {
@@ -225,16 +227,76 @@ impl<T: Send> Segment<T> {
     }
 }
 
+struct OrderGenerator {
+    rng: SmallRng,
+    current: usize,
+    size: usize
+}
+
+impl OrderGenerator {
+    fn new(size: usize) -> OrderGenerator {
+        let mut rng = SmallRng::from_rng(&mut rand::thread_rng()).unwrap();
+        //let mut rng = SmallRng::new();
+        let rand: usize = rng.gen();
+        let current = rand & (size - 1);
+        OrderGenerator {
+            rng,
+            current,
+            size
+        }
+    }
+
+    fn iter(&self) -> OrderGeneratorIterator {
+        OrderGeneratorIterator {
+            generator: self,
+            current: self.current,
+            start: self.current,
+            bitmask: self.size - 1,
+            started: false
+        }
+    }
+}
+
+pub struct OrderGeneratorIterator<'a> {
+    generator: &'a OrderGenerator,
+    current: usize,
+    start: usize,
+    bitmask: usize,
+    started: bool
+}
+
+impl<'a> Iterator for OrderGeneratorIterator<'a> {
+    type Item = usize;
+    fn next(&mut self) -> Option<usize> {
+        let result = Some(self.current & self.bitmask);
+        if self.current & self.bitmask == self.start && self.started {
+            return None
+        }
+        self.current += 1;
+        self.started = true;
+        result
+    }
+}
+
 mod tests {
     #![allow(unused_imports)]
-    use super::SegQueue;
+    use super::{SegQueue, OrderGenerator};
     use std::sync::Arc;
     use std::thread;
+    
+    #[test]
+    fn test_single_threaded() {
+        let gen = OrderGenerator::new(32);
+
+        for index in gen.iter() {
+            println!("{}", index);
+        }
+    }
 
     #[test]
     #[ignore]
     fn test_with_contention() {
-        let mut queue: Arc<SegQueue<u16>> = Arc::new(SegQueue::new(20));
+        let mut queue: Arc<SegQueue<u16>> = Arc::new(SegQueue::new(32));
         
         let mut waitvec: Vec<thread::JoinHandle<()>> = Vec::new();
 

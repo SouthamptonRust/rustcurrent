@@ -47,7 +47,7 @@ impl<T: Send> Queue<T> {
         unsafe {
             let rng = &mut *self.rng.get();
             let backoff_time = rng.gen_range(0, max_backoff);
-            thread::sleep(Duration::new(0, backoff_time * 1000));    
+            thread::sleep(Duration::new(0, backoff_time * 10));    
         }
         max_backoff * 2
     }
@@ -66,7 +66,7 @@ impl<T: Send> Queue<T> {
                 Ok(_) => { return; },
                 Err(old_node) => old_node
             };
-            backoff = self.backoff(backoff);
+            //backoff = self.backoff(backoff);
         }
     }
 
@@ -116,7 +116,7 @@ impl<T: Send> Queue<T> {
             if let Ok(val) = self.try_dequeue() {
                 return val
             }
-            backoff = self.backoff(backoff);
+            //backoff = self.backoff(backoff);
         }
     }
 
