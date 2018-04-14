@@ -95,6 +95,59 @@ impl<T: Hash + Send> HashSet<T> {
             loop {
                 if fail_count > MAX_FAILURES {
                     bucket[pos].mark();
+                    node = bucket[pos].get_ptr();
+                }
+                match node {
+                    None => {
+                        return self.try_insert(&bucket[pos], ptr::null_mut(), hash, data)
+                    },
+                    Some(mut node_ptr) => {
+                        if atomic_markable::is_marked(node_ptr) {
+                            let new_bucket_ptr = self.expand(bucket, pos, r);
+                            if atomic_markable::is_marked_second(new_bucket_ptr) {
+                                bucket = get_bucket(new_bucket_ptr);
+                                break;
+                            } else {
+                                node_ptr = new_bucket_ptr;
+                            }
+                        }
+                        if atomic_markable::is_marked_second(node_ptr) {
+                            bucket = get_bucket(node_ptr);
+                            break;
+                        } else {
+                            self.manager.protect(node_ptr, 0);
+                            let node2 = bucket[pos].get_ptr();
+                            if node2 != node {
+                                node = node2;
+                                fail_count += 1;
+                                continue;
+                            } else {
+                                let data_node = get_data_node(node_ptr);
+                                if data_node.hash == hash {
+                                    return Err(data)
+                                }
+                                match bucket[pos].compare_and_mark(node_ptr) {
+                                    Ok(_) => {
+                                        let new_ptr = self.expand(bucket, pos, r);
+                                        if atomic_markable::is_marked_second(new_ptr) {
+                                            bucket = get_bucket(new_ptr);
+                                            break;
+                                        } else {
+                                            fail_count += 1;
+                                        }
+                                    },
+                                    Err(current) => {
+                                        if atomic_markable::is_marked_second(current) {
+                                            bucket = get_bucket(current);
+                                            break;
+                                        } else {
+                                            fail_count += 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -102,6 +155,27 @@ impl<T: Hash + Send> HashSet<T> {
         }
 
         Ok(())
+    }
+
+    fn try_insert(&self, position: &AtomicMarkablePtr<Node<T>>, old: *mut Node<T>, hash: u64, value: T) -> Result<(), T> {
+        let data_node = DataNode::new(value, hash);
+        let data_node_ptr = Box::into_raw(Box::new(Node::Data(data_node)));
+
+        return match position.compare_exchange(old, data_node_ptr) {
+            Ok(_) => Ok(()),
+            Err(_) => {
+                unsafe {
+                    let node = ptr::read(data_node_ptr);
+                    if let Node::Data(data_node) = node {
+                        let data = data_node.value;
+                        Box::from_raw(data_node_ptr);
+                        Err(data)
+                    } else {
+                        panic!("Unexpected array node!")
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -131,6 +205,15 @@ enum Node<T: Send> {
 struct DataNode<T: Send> {
     value: T,
     hash: u64
+}
+
+impl<T: Send> DataNode<T> {
+    fn new(value: T, hash: u64) -> Self {
+        DataNode {
+            value,
+            hash
+        }
+    }
 }
 
 struct ArrayNode<T: Send> {
