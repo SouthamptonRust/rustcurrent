@@ -20,7 +20,7 @@ unsafe impl<T: Send> Sync for SegQueue<T> {}
 impl<T: Send> SegQueue<T> {
     pub fn new(k: usize) -> Self {
         if k > 0 || k & (k - 1) == 0 {
-            panic!("k must be a positive power of 2!");
+            panic!("k must be a non-zero power of 2!");
         }
         let init_node = Box::into_raw(Box::new(Segment::new(k)));
         SegQueue {
@@ -143,7 +143,7 @@ impl<T: Send> SegQueue<T> {
                         Ok(_) => {
                             match self.tail.compare_exchange(tail_old, new_seg_ptr, Release, Relaxed) {
                                 Ok(_) => {},
-                                Err(_) => {-}
+                                Err(_) => {}
                             }
                         },
                         Err(_) => { Box::from_raw(new_seg_ptr); }
