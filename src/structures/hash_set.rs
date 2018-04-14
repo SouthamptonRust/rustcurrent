@@ -1,4 +1,4 @@
-use std::sync::atomic::Ordering;
+use std::sync::atomic::Ordering::{Release};
 use std::hash::{Hash, Hasher, BuildHasher};
 use std::ptr;
 use std::borrow::Borrow;
@@ -44,9 +44,77 @@ impl<T: Hash + Send> HashSet<T> {
         value.hash(&mut hasher);
         hasher.finish()
     }
+
+    fn expand_map(&self, bucket: &Vec<AtomicMarkablePtr<Node<T>>>, pos: usize, shift_amount:usize) -> *mut Node<T> {
+        let node = bucket[pos].get_ptr().unwrap();
+        self.manager.protect(atomic_markable::unmark(node), 0);
+        if atomic_markable::is_marked_second(node) {
+            return node
+        }
+
+        let node2 = bucket[pos].get_ptr().unwrap();
+        if !ptr::eq(node, node2) {
+            return node2
+        }
+
+        let array_node: ArrayNode<T> = ArrayNode::new(CHILD_SIZE);
+        let hash = unsafe { match &*atomic_markable::unmark(node) {
+            &Node::Data(ref data_node) => data_node.hash,
+            &Node::Array(_) => { panic!("Unexpected array node!") }
+        }};
+
+        let new_pos = (hash >> (shift_amount + self.shift_step)) as usize & (CHILD_SIZE - 1);
+        array_node.array[new_pos].store(atomic_markable::unmark(node));
+
+        let array_node_ptr = Box::into_raw(Box::new(Node::Array(array_node)));
+        let array_node_ptr_marked = atomic_markable::mark_second(array_node_ptr);
+
+        return match bucket[pos].compare_exchange(node, array_node_ptr_marked) {
+            Ok(_) => array_node_ptr_marked,
+            Err(current) => {
+                let vec = get_bucket(array_node_ptr);
+                vec[new_pos].store(ptr::null_mut());
+                unsafe { Box::from_raw(array_node_ptr) };
+                current
+            }
+        }
+    }
 }
 
-pub struct Node<T: Send> {
+fn get_bucket<'a, T: Send>(array_node: *mut Node<T>) -> &'a Vec<AtomicMarkablePtr<Node<T>>> {
+    unsafe {
+        match &*(atomic_markable::unmark_second(array_node)) {
+            &Node::Data(_) => panic!("Unexpected data node!: {:b}", array_node as usize),
+            &Node::Array(ref array_node) => { &array_node.array }
+        }
+    }
+}
+
+enum Node<T: Send> {
+    Data(DataNode<T>),
+    Array(ArrayNode<T>)
+}
+
+struct DataNode<T: Send> {
     value: T,
     hash: u64
+}
+
+struct ArrayNode<T: Send> {
+    array: Vec<AtomicMarkablePtr<Node<T>>>,
+    size: usize
+}
+
+impl<T: Send> ArrayNode<T> {
+    fn new(size: usize) -> Self {
+        let mut array = Vec::with_capacity(size);
+        for _ in 0..size {
+            array.push(AtomicMarkablePtr::default());
+        }
+
+        ArrayNode {
+            array,
+            size
+        }
+    }
 }

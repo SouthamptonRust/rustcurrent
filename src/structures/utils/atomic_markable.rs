@@ -55,6 +55,10 @@ impl <T: Send> AtomicMarkablePtr<T> {
     pub fn compare_exchange(&self, current: *mut T, new: *mut T) -> Result<*mut T, *mut T> {
         self.ptr.compare_exchange(current, new, Release, Relaxed)
     }
+
+    pub fn store(&self, val: *mut T) {
+        self.ptr.store(val, Release);
+    }
 }
 
 impl<T: Send> Default for AtomicMarkablePtr<T> {
