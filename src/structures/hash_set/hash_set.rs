@@ -80,7 +80,7 @@ impl<T: Hash + Send> HashSet<T> {
         }
     }
 
-    fn insert(&self, data: T) -> Result<(), T> {
+    fn insert(&self, mut data: T) -> Result<(), T> {
         let hash = self.hash(&data);
         let mut mut_hash = hash;
         let mut bucket = &self.head;
@@ -99,7 +99,10 @@ impl<T: Hash + Send> HashSet<T> {
                 }
                 match node {
                     None => {
-                        return self.try_insert(&bucket[pos], ptr::null_mut(), hash, data)
+                        data = match self.try_insert(&bucket[pos], ptr::null_mut(), hash, data) {
+                            Ok(()) => return Ok(()),
+                            Err(old_data) => old_data
+                        }
                     },
                     Some(mut node_ptr) => {
                         if atomic_markable::is_marked(node_ptr) {
