@@ -163,7 +163,10 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                     None => {
                         value = match self.try_insert(&bucket[pos], ptr::null_mut(), hash, value) {
                             Ok(_) => { return Ok(()) },
-                            Err(old) => old 
+                            Err(old) => {
+                                node = bucket[pos].get_ptr();
+                                old
+                            } 
                         }
                     },
                     Some(mut node_ptr) => {
@@ -912,7 +915,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_multithreaded_insert() {
         let map: Arc<HashMap<u16, String>> = Arc::new(HashMap::new());
         let mut wait_vec: Vec<thread::JoinHandle<()>> = Vec::new();

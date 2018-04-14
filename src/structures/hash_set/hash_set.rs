@@ -80,7 +80,7 @@ impl<T: Hash + Send> HashSet<T> {
         }
     }
 
-    fn insert(&self, mut data: T) -> Result<(), T> {
+    pub fn insert(&self, mut data: T) -> Result<(), T> {
         let hash = self.hash(&data);
         let mut mut_hash = hash;
         let mut bucket = &self.head;
@@ -181,7 +181,7 @@ impl<T: Hash + Send> HashSet<T> {
         }
     }
 
-    fn contains<Q: ?Sized>(&self, key: &Q) -> bool
+    pub fn contains<Q: ?Sized>(&self, key: &Q) -> bool
     where T: Borrow<Q>,
           Q: Hash + Send
     {
@@ -256,6 +256,115 @@ impl<T: Hash + Send> HashSet<T> {
             false
         }
     }
+
+    pub fn remove<Q: ?Sized>(&self, expected: &Q) -> Option<T> 
+    where T: Borrow<Q>,
+          Q: Hash + Send
+    {
+        let hash = self.hash(expected);
+        let mut mut_hash = hash;
+        let mut r = 0usize;
+        let mut bucket = &self.head;
+
+        while r < KEY_SIZE - self.shift_step {
+            let pos = mut_hash as usize & (bucket.len() - 1);
+            mut_hash >>= self.shift_step;
+            let mut node = bucket[pos].get_ptr();
+
+            match node {
+                None => return None,
+                Some(mut node_ptr) => {
+                    if atomic_markable::is_marked_second(node_ptr) {
+                        bucket = get_bucket(node_ptr);
+                    } else if atomic_markable::is_marked(node_ptr) {
+                        bucket = get_bucket(self.expand(bucket, pos, r));
+                    } else {
+                        self.manager.protect(atomic_markable::unmark(node_ptr), 0);
+                        if node != bucket[pos].get_ptr() {
+                            let mut fail_count = 0;
+                            while node != bucket[pos].get_ptr() {
+                                node = bucket[pos].get_ptr();
+                                match node {
+                                    None => return None,
+                                    Some(new_ptr) => {
+                                        self.manager.protect(atomic_markable::unmark(atomic_markable::unmark_second(new_ptr)), 0);
+                                        fail_count += 1;
+                                        if fail_count > MAX_FAILURES {
+                                            bucket[pos].mark();
+                                            bucket = get_bucket(self.expand(bucket, pos, r));
+                                            continue;
+                                        }
+                                        node_ptr = new_ptr;
+                                    }
+                                }
+                            }
+                            if atomic_markable::is_marked_second(node_ptr) {
+                                bucket = get_bucket(node_ptr);
+                                r += self.shift_step;
+                                continue;
+                            } else if atomic_markable::is_marked(node_ptr) {
+                                bucket = get_bucket(self.expand(bucket, pos, r));
+                                r += self.shift_step;
+                                continue;
+                            }
+                        }
+                        let data_node = get_data_node(node_ptr);
+                        if data_node.hash == hash {
+                            match self.try_remove(&bucket[pos], node_ptr) {
+                                Ok(val) => return Some(val),
+                                Err(current) => {
+                                    if atomic_markable::is_marked_second(current) {
+                                        bucket = get_bucket(current);
+                                    } else if atomic_markable::is_marked(current) && ptr::eq(atomic_markable::unmark(current), node_ptr) {
+                                        bucket = get_bucket(self.expand(bucket, pos, r));
+                                    } else {
+                                        return None
+                                    }
+                                }
+                            }
+                        } else {
+                            return None
+                        }
+                    }
+                }
+            }
+
+            r += self.shift_step;
+        }
+
+        let pos = mut_hash as usize & (bucket.len() - 1);
+        let node = bucket[pos].get_ptr();
+        match node {
+            None => None,
+            Some(node_ptr) => {
+                let data_node = get_data_node(node_ptr);
+                if data_node.hash == hash {
+                    match self.try_remove(&bucket[pos], node_ptr) {
+                        Err(_) => None,
+                        Ok(val) => Some(val)
+                    }
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    fn try_remove(&self, position: &AtomicMarkablePtr<Node<T>>, old: *mut Node<T>) -> Result<T, *mut Node<T>> {
+        match position.compare_exchange(old, ptr::null_mut()) {
+            Ok(_) => {
+                let owned = unsafe { ptr::read(old) };
+                if let Node::Data(node) = owned {
+                    let data = node.value;
+                    self.manager.retire(old, 0);
+                    Ok(data)
+                } else {
+                    panic!("Unexpected array node!")
+                }
+            },
+            Err(current) => Err(current)
+        }
+    }
 }
 
 fn get_bucket<'a, T: Send>(node_ptr: *mut Node<T>) -> &'a Vec<AtomicMarkablePtr<Node<T>>> {
@@ -311,5 +420,26 @@ impl<T: Send> ArrayNode<T> {
             array,
             size
         }
+    }
+}
+
+mod tests {
+    #![allow(unused_imports)]
+    use super::HashSet;
+    use std::sync::Arc;
+    use std::thread;
+    use std::thread::JoinHandle;
+
+    #[test]
+    fn test_single_threaded() {
+        let set: HashSet<u32> = HashSet::new();
+
+        set.insert(54);
+
+        assert!(set.contains(&54));
+        assert!(!set.contains(&63));
+
+        assert_eq!(set.remove(&54), Some(54));
+        assert!(!set.contains(&54));
     }
 }

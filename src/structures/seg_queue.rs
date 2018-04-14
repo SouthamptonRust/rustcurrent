@@ -270,6 +270,7 @@ mod tests {
     use std::thread;
     
     #[test]
+    #[ignore]
     fn test_single_threaded() {
         let gen = OrderGenerator::new(12, 32);
 
