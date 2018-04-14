@@ -19,6 +19,24 @@ pub fn mark<T>(ptr: *mut T) -> *mut T {
     (ptr_usize | 0x1) as *mut T
 }
 
+pub fn is_marked_second<T>(ptr: *mut T) -> bool {
+    let ptr_usize = ptr as usize;
+    match (ptr_usize & 0x2) >> 1 {
+        0 => false,
+        _ => true
+    }
+}
+
+pub fn unmark_second<T>(ptr: *mut T) -> *mut T {
+    let ptr_usize = ptr as usize;
+    (ptr_usize & !(0x2)) as *mut T
+}
+
+pub fn mark_second<T>(ptr: *mut T) -> *mut T {
+    let ptr_usize = ptr as usize;
+    (ptr_usize | 0x2) as *mut T
+}
+
 pub struct AtomicMarkablePtr<T: Send> {
     ptr: AtomicPtr<T>
 }

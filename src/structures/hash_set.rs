@@ -35,6 +35,15 @@ impl<T: Hash + Send> HashSet<T> {
             manager: HPBRManager::new(100, 1)
         }
     }
+
+    fn hash<Q: ?Sized>(&self, value: &Q) -> u64
+    where T: Borrow<Q>,
+          Q: Hash + Send
+    {
+        let mut hasher = self.hasher.build_hasher();
+        value.hash(&mut hasher);
+        hasher.finish()
+    }
 }
 
 pub struct Node<T: Send> {
