@@ -4,8 +4,8 @@ use std::ptr;
 use std::borrow::Borrow;
 use std::collections::hash_map::RandomState;
 use memory::HPBRManager;
-use super::utils::atomic_markable::AtomicMarkablePtr;
-use super::utils::atomic_markable;
+use super::atomic_markable::AtomicMarkablePtr;
+use super::atomic_markable;
 
 const HEAD_SIZE: usize = 256;
 const CHILD_SIZE: usize = 16;
@@ -45,7 +45,7 @@ impl<T: Hash + Send> HashSet<T> {
         hasher.finish()
     }
 
-    fn expand_map(&self, bucket: &Vec<AtomicMarkablePtr<Node<T>>>, pos: usize, shift_amount:usize) -> *mut Node<T> {
+    fn expand(&self, bucket: &Vec<AtomicMarkablePtr<Node<T>>>, pos: usize, shift_amount:usize) -> *mut Node<T> {
         let node = bucket[pos].get_ptr().unwrap();
         self.manager.protect(atomic_markable::unmark(node), 0);
         if atomic_markable::is_marked_second(node) {
@@ -79,13 +79,46 @@ impl<T: Hash + Send> HashSet<T> {
             }
         }
     }
+
+    fn insert(&self, data: T) -> Result<(), T> {
+        let hash = self.hash(&data);
+        let mut mut_hash = hash;
+        let mut bucket = &self.head;
+        let mut r = 0usize;
+
+        while r < (KEY_SIZE) { 
+            let pos = mut_hash as usize & (bucket.len() - 1);
+            mut_hash = mut_hash >> self.shift_step;
+            let mut fail_count = 0;
+            let mut node = bucket[pos].get_ptr();
+
+            loop {
+                if fail_count > MAX_FAILURES {
+                    bucket[pos].mark();
+                }
+            }
+
+            r += self.shift_step;
+        }
+
+        Ok(())
+    }
 }
 
-fn get_bucket<'a, T: Send>(array_node: *mut Node<T>) -> &'a Vec<AtomicMarkablePtr<Node<T>>> {
+fn get_bucket<'a, T: Send>(node_ptr: *mut Node<T>) -> &'a Vec<AtomicMarkablePtr<Node<T>>> {
     unsafe {
-        match &*(atomic_markable::unmark_second(array_node)) {
-            &Node::Data(_) => panic!("Unexpected data node!: {:b}", array_node as usize),
-            &Node::Array(ref array_node) => { &array_node.array }
+        match &*(atomic_markable::unmark_second(node_ptr)) {
+            &Node::Data(_) => panic!("Unexpected data node!: {:b}", node_ptr as usize),
+            &Node::Array(ref array_node) => &array_node.array
+        }
+    }
+}
+
+fn get_data_node<'a, T: Send>(node_ptr: *mut Node<T>) -> &'a DataNode<T> {
+    unsafe {
+        match &*(atomic_markable::unmark(node_ptr)) {
+            &Node::Data(ref data_node) => data_node,
+            &Node::Array(_) => panic!("Unexpected array node!: {:b}", node_ptr as usize)
         }
     }
 }
