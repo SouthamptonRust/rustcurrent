@@ -180,6 +180,82 @@ impl<T: Hash + Send> HashSet<T> {
             }
         }
     }
+
+    fn contains<Q: ?Sized>(&self, key: &Q) -> bool
+    where T: Borrow<Q>,
+          Q: Hash + Send
+    {
+        let hash = self.hash(key);
+        let mut mut_hash = hash;
+        let mut r = 0usize;
+        let mut bucket = &self.head;
+
+        while r < KEY_SIZE - self.shift_step {
+            let pos = mut_hash as usize & (bucket.len() - 1);
+            mut_hash >>= self.shift_step;
+            let mut node = bucket[pos].get_ptr();
+
+            match node {
+                None => { return false },
+                Some(mut node_ptr) => {
+                    if atomic_markable::is_marked(node_ptr) {
+                        let new_bucket_ptr = self.expand(bucket, pos, r);
+                        node_ptr = new_bucket_ptr;
+                    }
+                    if atomic_markable::is_marked_second(node_ptr) {
+                        bucket = get_bucket(node_ptr);
+                        r += self.shift_step;
+                        continue;
+                    } else {
+                        self.manager.protect(atomic_markable::unmark(node_ptr), 0);
+                        if node != bucket[pos].get_ptr() {
+                            let mut fail_count = 0;
+                            while node != bucket[pos].get_ptr() {
+                                node = bucket[pos].get_ptr();
+                                match node {
+                                    None => return false,
+                                    Some(new_ptr) => {
+                                        self.manager.protect(atomic_markable::unmark(atomic_markable::unmark_second(new_ptr)), 0);
+                                        fail_count += 1;
+                                        if fail_count > MAX_FAILURES {
+                                            bucket[pos].mark();
+                                            node_ptr = self.expand(bucket, pos, r);
+                                            bucket = get_bucket(node_ptr);
+                                            break;
+                                        }
+                                        node_ptr = new_ptr;
+                                    }
+                                }
+                            }
+                            if atomic_markable::is_marked(node_ptr) {
+                                bucket = get_bucket(self.expand(bucket, pos, r));
+                                r += self.shift_step;
+                                continue;
+                            } else if atomic_markable::is_marked_second(node_ptr) {
+                                bucket = get_bucket(node_ptr);
+                                r += self.shift_step;
+                                continue;
+                            }
+                        }
+                        let data_node = get_data_node(node_ptr);
+                        return data_node.hash == hash
+                    }
+                }
+            }
+        }
+
+        let pos = mut_hash as usize & (CHILD_SIZE - 1);
+        if let Some(node_ptr) = bucket[pos].get_ptr() {
+            match unsafe { &*node_ptr } {
+                &Node::Array(_) => panic!("Unexpected array node!"),
+                &Node::Data(ref data_node) => {
+                    data_node.hash == hash
+                }
+            }
+        } else {
+            false
+        }
+    }
 }
 
 fn get_bucket<'a, T: Send>(node_ptr: *mut Node<T>) -> &'a Vec<AtomicMarkablePtr<Node<T>>> {

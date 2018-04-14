@@ -143,7 +143,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
     /// let map: HashMap<String, u8> = HashMap::new();
     /// map.insert("hello".to_owned(), 8);
     /// ```
-    pub fn insert(&self, key: K, value: V) -> Result<(), (K, V)> {
+    pub fn insert(&self, key: K, mut value: V) -> Result<(), (K, V)> {
         let hash = self.hash(&key);
         let mut mut_hash = hash;
         let mut bucket = &self.head;
@@ -161,9 +161,9 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                 }
                 match node {
                     None => {
-                        match self.try_insert(&bucket[pos], ptr::null_mut(), hash, value) {
+                        value = match self.try_insert(&bucket[pos], ptr::null_mut(), hash, value) {
                             Ok(_) => { return Ok(()) },
-                            Err(old) => { return Err((key, old)) }
+                            Err(old) => old 
                         }
                     },
                     Some(mut node_ptr) => {
@@ -174,9 +174,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                                 bucket = HashMap::get_bucket(new_bucket_ptr);
                                 break;
                             } else {
-                                //println!("hello");
                                 node_ptr = new_bucket_ptr;
-                                //println!("fart");
                             }
                         }
                         if atomic_markable::is_array_node(node_ptr) {
