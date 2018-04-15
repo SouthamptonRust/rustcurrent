@@ -939,7 +939,6 @@ mod tests {
     use std::thread;
     use std::thread::JoinHandle;
 
-    #[test]
     #[ignore]
     fn test_data_guard() {
         let map: HashMap<u8, u8> = HashMap::new();
@@ -947,7 +946,7 @@ mod tests {
         let _ = map.insert(23, 23);
         match map.get(&23) {
             Some(g) => {
-                assert_eq!(*g, 23);
+                assert_eq!(g.data(), &23);
                 assert_eq!(g.cloned(), 23);
                 println!("guard leaving scope");
             },
@@ -958,7 +957,6 @@ mod tests {
         let _ = map.insert(25, 25);
     }
 
-    #[test]
     #[ignore]
     fn test_single_thread_semantics() {
         let map : HashMap<u8, u8> = HashMap::new();
@@ -973,12 +971,12 @@ mod tests {
             }
         }
         
-        assert_eq!(*map.get(&3).unwrap(), 3);
+        assert_eq!(*map.get(&3).unwrap().data(), 3);
         assert_eq!(map.get(&250), None);
 
         assert_eq!(map.update(&3, &3, 7), Ok(()));
         assert_eq!(map.update(&239, &239, 7), Ok(()));
-        assert_eq!(*map.get(&3).unwrap(), 7);
+        assert_eq!(*map.get(&3).unwrap().data(), 7);
 
         println!("{:?}", map);
 
@@ -989,13 +987,12 @@ mod tests {
         assert_eq!(map.get(&3), None);
     }
 
-    #[test]
     #[ignore]
     fn test_borrow_string_map() {
         let map: HashMap<String, u16> = HashMap::new();
         let _ = map.insert("hello".to_owned(), 8);
         assert_eq!(map.get_clone("hello"), Some(8));
-        assert_eq!(*map.get("hello").unwrap(), 8);
+        assert_eq!(map.get("hello").unwrap().data(), &8);
         assert_eq!(map.remove("hello", &8), Some(8));
     }
 
@@ -1009,15 +1006,15 @@ mod tests {
             wait_vec.push(thread::spawn(move || {
                 for j in 0..2000 {
                     let val = format!("{}--{}", i, j);
-                    ////println!("inserting");
+                    //println!("inserting");
                     match map_clone.insert(j, val) {
                         Ok(()) => {},
                         Err((key, value)) => {
                             let expected = map_clone.get(&key);
                             match expected {
                                 Some(expected_value) => {
-                                    ////println!("updating");
-                                    let _ = map_clone.update(&key, &*expected_value, value);
+                                    //println!("updating");
+                                    let _ = map_clone.update(&key, &expected_value.cloned(), value);
                                 },
                                 None => {}
                             }
@@ -1074,7 +1071,7 @@ mod tests {
                 //println!("done inserting");
                 for i in 0..1000 {
                     if i > 300 && i < 800 {
-                        assert_eq!(*map_clone.get(&i).unwrap(), i);
+                        assert_eq!(map_clone.get(&i).unwrap().data(), &i);
                     }
                 }
                 //println!("done normal get");

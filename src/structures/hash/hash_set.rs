@@ -413,6 +413,7 @@ impl<'a, T: Send> Iterator for Iter<'a, T> {
                     if atomic_markable::is_marked(node_ptr) {
                         // Protect
                         let hphandle = self.manager.protect_dynamic(atomic_markable::unmark(node_ptr));
+                        
                         None
                     } else if atomic_markable::is_marked_second(node_ptr) {
                         let bucket = get_bucket(node_ptr);

@@ -16,7 +16,7 @@ impl<'a, T: Send + 'a, N: Send> DataGuard<'a, T, N> {
         }
     }
 
-    pub fn data(&self) -> &T {
+    pub fn data(&self) -> &'a T {
         self.data
     }
 }
@@ -24,13 +24,6 @@ impl<'a, T: Send + 'a, N: Send> DataGuard<'a, T, N> {
 impl<'a, T: Send + Clone + 'a, N: Send> DataGuard<'a, T, N> {
     pub fn cloned(self) -> T {
         self.data.clone()
-    }
-}
-
-impl<'a, T: Send + 'a, N: Send> Deref for DataGuard<'a, T, N> {
-    type Target = T;
-    fn deref(&self) -> &T {
-        self.data
     }
 }
 
