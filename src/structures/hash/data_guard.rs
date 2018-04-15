@@ -1,5 +1,4 @@
 use memory::{HPHandle};
-use std::ops::Deref;
 use std::fmt::Debug;
 use std::fmt;
 

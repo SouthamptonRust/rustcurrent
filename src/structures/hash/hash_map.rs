@@ -325,8 +325,6 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                     }
                 }
             }
-
-            r += self.shift_step;
         }
         // We should only be here if we got to the bottom
         let pos = mut_hash as usize & (CHILD_SIZE - 1);
@@ -748,8 +746,6 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                     }
                 }
             }
-
-            r += self.shift_step;
         }
         // We should only be here if we got to the bottom
         let pos = mut_hash as usize & (CHILD_SIZE - 1);
@@ -940,6 +936,7 @@ mod tests {
     use std::thread::JoinHandle;
 
     #[ignore]
+    #[test]
     fn test_data_guard() {
         let map: HashMap<u8, u8> = HashMap::new();
 
@@ -958,6 +955,7 @@ mod tests {
     }
 
     #[ignore]
+    #[test]
     fn test_single_thread_semantics() {
         let map : HashMap<u8, u8> = HashMap::new();
 
@@ -988,6 +986,7 @@ mod tests {
     }
 
     #[ignore]
+    #[test]
     fn test_borrow_string_map() {
         let map: HashMap<String, u16> = HashMap::new();
         let _ = map.insert("hello".to_owned(), 8);
@@ -997,7 +996,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_multithreaded_insert() {
         let map: Arc<HashMap<u16, u16>> = Arc::new(HashMap::new());
         let mut wait_vec: Vec<thread::JoinHandle<()>> = Vec::new();
