@@ -997,15 +997,16 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_multithreaded_insert() {
-        let map: Arc<HashMap<u16, String>> = Arc::new(HashMap::new());
+        let map: Arc<HashMap<u16, u16>> = Arc::new(HashMap::new());
         let mut wait_vec: Vec<thread::JoinHandle<()>> = Vec::new();
 
         for i in 0..10 {
             let map_clone = map.clone();
             wait_vec.push(thread::spawn(move || {
                 for j in 0..2000 {
-                    let val = format!("{}--{}", i, j);
+                    let val = j;
                     //println!("inserting");
                     match map_clone.insert(j, val) {
                         Ok(()) => {},
@@ -1035,6 +1036,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_typical() {
         let map: Arc<HashMap<u32, u32>> = Arc::default();
         let mut wait_vec: Vec<JoinHandle<()>> = Vec::new();

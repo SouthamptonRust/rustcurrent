@@ -5,6 +5,7 @@ use std::collections::hash_map::RandomState;
 use memory::HPBRManager;
 use super::atomic_markable::AtomicMarkablePtr;
 use super::atomic_markable;
+use super::data_guard::DataGuard;
 
 const HEAD_SIZE: usize = 256;
 const CHILD_SIZE: usize = 16;
@@ -364,6 +365,10 @@ impl<T: Hash + Send> HashSet<T> {
             Err(current) => Err(current)
         }
     }
+
+    pub fn iter(&self) -> Iter<T> {
+        Iter::new(&self.head, &self.manager)
+    }
 }
 
 fn get_bucket<'a, T: Send>(node_ptr: *mut Node<T>) -> &'a Vec<AtomicMarkablePtr<Node<T>>> {
@@ -403,25 +408,60 @@ impl<'a, T:Send> Iter<'a, T> {
 }
 
 impl<'a, T: Send> Iterator for Iter<'a, T> {
-    type Item = &'a T;
+    type Item = DataGuard<'a, T, Node<T>>;
     fn next(&mut self) -> Option<Self::Item> {
-        if self.index < self.current_array.len() {
+        let index = self.index;
+        self.index += 1;
+        if index < self.current_array.len() {
             // Check if data or array
-            match self.current_array[self.index].get_ptr() {
-                Some(node_ptr) => {
+            match self.current_array[index].get_ptr() {
+                Some(mut node_ptr) => {
                     // Protect with a HPHandle
                     if atomic_markable::is_marked(node_ptr) {
                         // Protect
-                        let hphandle = self.manager.protect_dynamic(atomic_markable::unmark(node_ptr));
-                        
-                        None
+                        let mut hphandle = self.manager.protect_dynamic(atomic_markable::unmark(node_ptr));
+                        // need to loop here
+                        while Some(node_ptr) != self.current_array[index].get_ptr() {
+                            let new_node = self.current_array[index].get_ptr();
+                            match new_node {
+                                None => return self.next(),
+                                Some(new_ptr) => {
+                                    hphandle = self.manager.protect_dynamic(atomic_markable::unmark(atomic_markable::unmark_second(node_ptr)));
+                                    if atomic_markable::is_marked_second(new_ptr) {
+                                        let bucket = get_bucket(new_ptr);
+                                        self.node_stack.push(bucket);
+                                        return self.next()
+                                    }
+                                    node_ptr = new_ptr;
+                                }
+                            }
+                        }
+                        let data_node = get_data_node(atomic_markable::unmark(node_ptr));
+                        Some(DataGuard::new(&data_node.value, hphandle))
                     } else if atomic_markable::is_marked_second(node_ptr) {
                         let bucket = get_bucket(node_ptr);
                         self.node_stack.push(bucket);
                         return self.next()
                     } else {
-                        // Protect
-                        None
+                        let mut hphandle = self.manager.protect_dynamic(node_ptr);
+                        while Some(node_ptr) != self.current_array[index].get_ptr() {
+                            let new_node = self.current_array[index].get_ptr();
+                            match new_node {
+                                None => return self.next(),
+                                Some(new_ptr) => {
+                                    hphandle = self.manager.protect_dynamic(atomic_markable::unmark(atomic_markable::unmark_second(node_ptr)));
+                                    if atomic_markable::is_marked_second(new_ptr) {
+                                        let bucket = get_bucket(new_ptr);
+                                        self.node_stack.push(bucket);
+                                        return self.next()
+                                    }
+                                    node_ptr = new_ptr;
+                                }
+                            }
+                        }
+
+                        let data_node = get_data_node(atomic_markable::unmark(node_ptr));
+                        Some(DataGuard::new(&data_node.value, hphandle))
                     }
                 },
                 None => {
@@ -442,12 +482,12 @@ impl<'a, T: Send> Iterator for Iter<'a, T> {
 
 }
 
-enum Node<T: Send> {
+pub enum Node<T: Send> {
     Data(DataNode<T>),
     Array(ArrayNode<T>)
 }
 
-struct DataNode<T: Send> {
+pub struct DataNode<T: Send> {
     value: T,
     hash: u64
 }
@@ -461,7 +501,7 @@ impl<T: Send> DataNode<T> {
     }
 }
 
-struct ArrayNode<T: Send> {
+pub struct ArrayNode<T: Send> {
     array: Vec<AtomicMarkablePtr<Node<T>>>,
     size: usize
 }
@@ -486,6 +526,7 @@ mod tests {
     use std::sync::Arc;
     use std::thread;
     use std::thread::JoinHandle;
+    use std::collections;
 
     #[test]
     fn test_single_threaded() {
@@ -498,5 +539,28 @@ mod tests {
 
         assert_eq!(set.remove(&54), Some(54));
         assert!(!set.contains(&54));
+
+        set.insert(60);
+        set.insert(72);
+
+        for i in set.iter() {
+            println!("{:?}", i.data());
+        }
+
+        for i in 0..2500 {
+            set.insert(i);
+        }
+
+        let mut test_set: collections::HashSet<u32> = collections::HashSet::new();
+        let mut counter = 0;
+        for i in set.iter() {
+            assert!(!test_set.contains(i.data()));
+            println!("{:?}", i.data());
+            test_set.insert(*i.data());
+            counter += 1;
+        }
+
+        println!("{:?}", counter);
+        assert_eq!(counter, 2500);
     }
 }
