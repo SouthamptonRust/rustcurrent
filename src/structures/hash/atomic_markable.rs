@@ -38,6 +38,7 @@ pub fn mark_second<T>(ptr: *mut T) -> *mut T {
     (ptr_usize | 0x2) as *mut T
 }
 
+#[derive(Debug)]
 pub struct AtomicMarkablePtr<T: Send> {
     ptr: AtomicUsize,
     _phantom: PhantomData<T>

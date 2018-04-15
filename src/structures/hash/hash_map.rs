@@ -90,7 +90,6 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
     /// at this position to the new ArrayNode.
     fn expand_map(&self, bucket: &Vec<AtomicMarkablePtr<Node<K, V>>>, pos: usize, shift_amount: usize) -> *mut Node<K, V> {
         // We know this node must exist
-        //println!("expanding: {:?} at {:?}", bucket, pos);
         let node = bucket[pos].get_ptr().unwrap();
         self.manager.protect(atomic_markable::unmark(node), 0);
         if atomic_markable::is_marked_second(node) {
@@ -316,7 +315,10 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                         let data_node = get_data_node(node_ptr);
                         if data_node.hash == hash {
                             let hp_handle = self.manager.protect_dynamic(node_ptr);
-                            return Some(DataGuard::new(&data_node.value, hp_handle));
+                            if data_node.value.is_none() {
+                                println!("fuck");
+                            }
+                            return Some(DataGuard::new(data_node.value.as_ref().unwrap(), hp_handle));
                         } else {
                             return None
                         }
@@ -334,7 +336,10 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                     &Node::Array(_) => panic!("Unexpected array node!"),
                     &Node::Data(ref data_node) => {
                         let hp_handle = self.manager.protect_dynamic(node_ptr);
-                        return Some(DataGuard::new(&data_node.value, hp_handle));
+                        if data_node.value.is_none() {
+                            println!("fuck");
+                        }
+                        return Some(DataGuard::new(data_node.value.as_ref().unwrap(), hp_handle));
                     }
                 }
             }
@@ -353,7 +358,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                 unsafe {
                     let node = ptr::read(data_node_ptr);
                     if let Node::Data(data_node) = node {
-                        let data = data_node.value;
+                        let data = data_node.value.unwrap();
                         Box::from_raw(data_node_ptr);
                         Err(data)
                     } else {
@@ -442,7 +447,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                         // Hazard pointer is safe now, so we can access the node
                         let data_node = get_data_node(node_ptr);
                         if data_node.hash == hash {
-                            if data_node.value != *expected {
+                            if data_node.value.as_ref() != Some(expected) {
                                 return Err(new)
                             }
                             new = match self.try_update(&bucket[pos], node_ptr, hash, new) {
@@ -480,7 +485,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
             None => { Err(new) },
             Some(node_ptr) => {
                 let data_node = get_data_node(node_ptr);
-                if data_node.value == *expected {
+                if data_node.value.as_ref() == Some(expected) {
                     match self.try_update(&bucket[pos], node_ptr, hash, new) {
                         Ok(()) => {
                             self.manager.retire(node_ptr, 0);
@@ -506,7 +511,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
             Err(current) => {
                 unsafe {
                     if let Node::Data(node) = ptr::read(data_node_ptr) {
-                        let data = node.value;
+                        let data = node.value.unwrap();
                         Box::from_raw(data_node_ptr);
                         Err((data, current))
                     } else {
@@ -584,7 +589,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                         }
                         let data_node = get_data_node(node_ptr);
                         if data_node.hash == hash {
-                            if data_node.value != *expected {
+                            if data_node.value.as_ref() != Some(expected) {
                                 return None
                             }
                             match self.try_remove(&bucket[pos], node_ptr) {
@@ -596,7 +601,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                                         if let Node::Data(node) = owned_node {
                                             let data = node.value;
                                             self.manager.retire(node_ptr, 0);
-                                            return Some(data);
+                                            return data;
                                         } else {
                                             panic!("Unexpected array node!");
                                         }
@@ -629,7 +634,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
             Some(node_ptr) => {
                 //println!("nodeptr: {:b}", node_ptr as usize);
                 let data_node = get_data_node(node_ptr);
-                if data_node.value == *expected {
+                if data_node.value.as_ref() == Some(expected) {
                     match self.try_remove(&bucket[pos], node_ptr) {
                         Err(_) => None,
                         Ok(()) => {
@@ -638,7 +643,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                                 if let Node::Data(node) = owned_node {
                                     let data = node.value;
                                     self.manager.retire(node_ptr, 0);
-                                    Some(data)
+                                    data
                                 } else {
                                     panic!("Unexpected array node!");
                                 }
@@ -736,7 +741,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                         }
                         let data_node = get_data_node(node_ptr);
                         if data_node.hash == hash {
-                            return Some(data_node.value.clone());
+                            return data_node.value.clone();
                         } else {
                             return None
                         }
@@ -753,7 +758,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
                 match &*node_ptr {
                     &Node::Array(_) => panic!("Unexpected array node!"),
                     &Node::Data(ref data_node) => {
-                        return Some(data_node.value.clone())
+                        return data_node.value.clone()
                     }
                 }
             }
@@ -837,7 +842,7 @@ pub enum Node<K: Send, V: Send> {
 }
 
 pub struct DataNode<K: Send, V: Send> {
-    value: V,
+    value: Option<V>,
     hash: u64,
     _marker: PhantomData<K>
 }
@@ -845,8 +850,18 @@ pub struct DataNode<K: Send, V: Send> {
 impl<K: Send, V: Send> DataNode<K, V> {
     fn new(value: V, hash: u64) -> Self {
         DataNode {
-            value,
+            value: Some(value),
             hash,
+            _marker: PhantomData
+        }
+    }
+}
+
+impl<K: Send, V: Send> Default for DataNode<K, V> {
+    fn default() -> Self {
+        DataNode {
+            value: None,
+            hash: 0,
             _marker: PhantomData
         }
     }
@@ -1022,6 +1037,7 @@ mod tests {
         //println!("{:?}", map.get(&1174));
     }
 
+    #[test]
     fn test_typical() {
         let map: Arc<HashMap<u32, u32>> = Arc::default();
         let mut wait_vec: Vec<JoinHandle<()>> = Vec::new();
