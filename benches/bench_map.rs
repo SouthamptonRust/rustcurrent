@@ -397,6 +397,6 @@ fn bench_heavy_insert_all(c: &mut Criterion) {
     vec![2, 4, 8, 16, 32, 64]);
 }
 
-criterion_group!(benches, bench_typical_lock_all, bench_typical_all, bench_equal_focus_lock_all, bench_equal_focus_all
+criterion_group!(benches, bench_typical_all, bench_equal_focus_lock_all, bench_equal_focus_all
                         , bench_update_lock_all, bench_update_all, bench_heavy_insert_lock_all, bench_heavy_insert_all);
 criterion_main!(benches);
