@@ -265,10 +265,16 @@ impl<T: Send> EliminationLayer<T> {
                 }
             }
         }
-
-        // Delay goes here
-        // Passive elimination goes here
-        Ok(None)
+        thread::sleep(Duration::new(0, 1000));
+        let me_atomic = self.location.get(&me).unwrap().data();
+        match me_atomic.compare_exchange(me_info_ptr, ptr::null_mut(), Release, Relaxed) {
+            Ok(_) => {
+                let mut boxed_info = unsafe { Box::from_raw(me_info_ptr) };
+                let node = mem::replace(&mut (*boxed_info).node, None);
+                return Err(node)
+            },
+            Err(current) => return self.finish_collision(current, op)
+        }
     }
 
     fn get_position(&self) -> usize {
@@ -280,7 +286,15 @@ impl<T: Send> EliminationLayer<T> {
             -> Result<Option<T>, Option<Box<Node<T>>>> 
     {
         let me = unsafe { &*me_ptr };
+        self.manager.protect(them_ptr, 0);
         
+        // Check the hazard pointer
+        if !ptr::eq(them_atomic.load(Acquire), them_ptr) {
+            let mut boxed_node = unsafe { Box::from_raw(me_ptr) };
+            let node = mem::replace(&mut (*boxed_node).node, None);
+            return Err(node)
+        }
+
         match me.op {
             OpType::Push => {
                 match them_atomic.compare_exchange(them_ptr, me_ptr, Release, Relaxed) {
@@ -314,11 +328,12 @@ impl<T: Send> EliminationLayer<T> {
 
     fn finish_collision(&self, new_info_ptr: *mut ThreadInfo<T>, me_op: OpType) -> Result<Option<T>, Option<Box<Node<T>>>> {
         match me_op {
-            Push => {return Ok(None)},
-            Pop => {
+            OpType::Push => {return Ok(None)},
+            OpType::Pop => {
                 let owned_info = unsafe { ptr::read(new_info_ptr) };
                 let mut node = owned_info.node.unwrap();
                 let value = mem::replace(&mut (*node).data, None);
+                self.location.get(&thread::current().id()).unwrap().data().store(ptr::null_mut(), Release);
                 self.manager.retire(new_info_ptr, 0);
                 return Ok(value)
             }
