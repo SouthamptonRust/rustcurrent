@@ -269,6 +269,7 @@ impl<'a, T: Send> HPBRManager<T> {
 
     fn free(garbage: *mut T) {
         // Letting this box go out of scope should call Drop on the garbage
+        //println!("Deleting: {:?}", garbage);
         unsafe {
             Box::from_raw(garbage);
         }
@@ -399,6 +400,7 @@ impl<T: Send> Drop for ThreadLocalInfo<T> {
     fn drop(&mut self) {
         // Free all nodes left over at program end
         for garbage in self.retired_list.drain(..) {
+            //println!("dropping {:?}", garbage);
             unsafe {
                 Box::from_raw(garbage);
             }

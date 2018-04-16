@@ -168,11 +168,11 @@ impl<T: Hash + Send> HashSet<T> {
             Ok(_) => Ok(()),
             Err(_) => {
                 unsafe {
-                    let node = ptr::read(data_node_ptr);
+                    let node = ptr::replace(data_node_ptr, Node::Data(DataNode::default()));
                     if let Node::Data(data_node) = node {
                         let data = data_node.value;
                         Box::from_raw(data_node_ptr);
-                        Err(data)
+                        Err(data.unwrap())
                     } else {
                         panic!("Unexpected array node!")
                     }
@@ -311,7 +311,7 @@ impl<T: Hash + Send> HashSet<T> {
                         let data_node = get_data_node(node_ptr);
                         if data_node.hash == hash {
                             match self.try_remove(&bucket[pos], node_ptr) {
-                                Ok(val) => return Some(val),
+                                Ok(val) => return val,
                                 Err(current) => {
                                     if atomic_markable::is_marked_second(current) {
                                         bucket = get_bucket(current);
@@ -341,7 +341,7 @@ impl<T: Hash + Send> HashSet<T> {
                 if data_node.hash == hash {
                     match self.try_remove(&bucket[pos], node_ptr) {
                         Err(_) => None,
-                        Ok(val) => Some(val)
+                        Ok(val) => val
                     }
                 } else {
                     None
@@ -350,7 +350,7 @@ impl<T: Hash + Send> HashSet<T> {
         }
     }
 
-    fn try_remove(&self, position: &AtomicMarkablePtr<Node<T>>, old: *mut Node<T>) -> Result<T, *mut Node<T>> {
+    fn try_remove(&self, position: &AtomicMarkablePtr<Node<T>>, old: *mut Node<T>) -> Result<Option<T>, *mut Node<T>> {
         match position.compare_exchange(old, ptr::null_mut()) {
             Ok(_) => {
                 let owned = unsafe { ptr::read(old) };
@@ -437,7 +437,7 @@ impl<'a, T: Send> Iterator for Iter<'a, T> {
                             }
                         }
                         let data_node = get_data_node(atomic_markable::unmark(node_ptr));
-                        Some(DataGuard::new(&data_node.value, hphandle))
+                        Some(DataGuard::new(&data_node.value.as_ref().unwrap(), hphandle))
                     } else if atomic_markable::is_marked_second(node_ptr) {
                         let bucket = get_bucket(node_ptr);
                         self.node_stack.push(bucket);
@@ -461,7 +461,7 @@ impl<'a, T: Send> Iterator for Iter<'a, T> {
                         }
 
                         let data_node = get_data_node(atomic_markable::unmark(node_ptr));
-                        Some(DataGuard::new(&data_node.value, hphandle))
+                        Some(DataGuard::new(&data_node.value.as_ref().unwrap(), hphandle))
                     }
                 },
                 None => {
@@ -488,15 +488,24 @@ pub enum Node<T: Send> {
 }
 
 pub struct DataNode<T: Send> {
-    value: T,
+    value: Option<T>,
     hash: u64
 }
 
 impl<T: Send> DataNode<T> {
     fn new(value: T, hash: u64) -> Self {
         DataNode {
-            value,
+            value: Some(value),
             hash
+        }
+    }
+}
+
+impl<T: Send> Default for DataNode<T> {
+    fn default() -> Self {
+        DataNode {
+            value: None,
+            hash: 0
         }
     }
 }
@@ -528,7 +537,6 @@ mod tests {
     use std::thread::JoinHandle;
     use std::collections;
 
-    #[test]
     fn test_single_threaded() {
         let set: HashSet<u32> = HashSet::new();
 

@@ -7,6 +7,12 @@ pub struct DataGuard<'a, T: Send + 'a, N: Send + 'a> {
     handle: HPHandle<'a, N>
 }
 
+impl<'a, T: Send + 'a, N: Send> Drop for DataGuard<'a, T, N> {
+    fn drop(&mut self) {
+        //println!("Dropping data guard with {:p}", self.data);
+    }
+}
+
 impl<'a, T: Send + 'a, N: Send> DataGuard<'a, T, N> {
     pub fn new(data: &'a T, handle: HPHandle<'a, N>) -> DataGuard<'a, T, N> {
         DataGuard {
