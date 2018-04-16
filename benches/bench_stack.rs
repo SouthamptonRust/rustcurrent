@@ -90,7 +90,7 @@ fn bench_stack_noelim_lock_low(c: &mut Criterion) {
 }
 
 fn bench_stack_noelim_low(c: &mut Criterion) {
-    c.bench_function("stack_noelim_low", |b| b.iter(|| bench_rustcurrent_stack(4, false)));
+    c.bench_function("stack_noelim_low", |b| b.iter(|| bench_rustcurrent_stack(4, true)));
 }
 
 fn bench_stack_noelim_lock_high(c: &mut Criterion) {
@@ -98,9 +98,9 @@ fn bench_stack_noelim_lock_high(c: &mut Criterion) {
 }
 
 fn bench_stack_noelim_high(c: &mut Criterion) {
-    c.bench_function("stack_noelim_high", |b| b.iter(|| bench_rustcurrent_stack(20, false)));
+    c.bench_function("stack_noelim_high", |b| b.iter(|| bench_rustcurrent_stack(20, true)));
 }
 
 
-criterion_group!(benches, bench_stack_noelim_lock_high, bench_stack_noelim_high);
+criterion_group!(benches, bench_stack_noelim_low);
 criterion_main!(benches);
