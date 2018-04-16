@@ -55,7 +55,7 @@ where K: Send,
     manager: HPBRManager<Node<K, V>>
 }
 
-impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
+impl<K: Hash + Send, V: Send> HashMap<K, V> {
     //// Create a new Wait-Free HashMap with the default head and child sizes.
     /// # Examples
     /// ```
@@ -79,7 +79,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
     /// Hash a single element with the default Rust hasher initialised to a random state.
     fn hash<Q: ?Sized>(&self, key: &Q) -> u64 
     where K: Borrow<Q>,
-          Q: Eq + Hash + Send 
+          Q: Hash + Send 
     {
         let mut hasher = self.hasher.build_hasher();
         key.hash(&mut hasher);
@@ -253,7 +253,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
     /// ``` 
     pub fn get<Q: ?Sized>(&self, key: &Q) -> Option<DataGuard<V, Node<K, V>>>
     where K: Borrow<Q>,
-          Q: Eq + Hash + Send  
+          Q: PartialEq + Hash + Send  
     {
         let hash = self.hash(key);
         let mut mut_hash = hash;
@@ -390,7 +390,8 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
     /// ```
     pub fn update<'a, 'b, Q: ?Sized>(&'a self, key: &Q, expected: &'b V, mut new: V) -> Result<(), V>
     where K: Borrow<Q>,
-          Q: Eq + Hash + Send  
+          Q: PartialEq + Hash + Send,
+          V: PartialEq  
     {
         let hash = self.hash(key);
         let mut mut_hash = hash;
@@ -536,7 +537,8 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
     /// ```
     pub fn remove<Q: ?Sized>(&self, key: &Q, expected: &V) -> Option<V>
     where K: Borrow<Q>,
-          Q: Eq + Hash + Send   
+          Q: PartialEq + Hash + Send,
+          V: PartialEq   
     {
         let hash = self.hash(key);
         let mut mut_hash = hash;
@@ -670,7 +672,7 @@ impl<K: Eq + Hash + Send, V: Send + Eq> HashMap<K, V> {
     /// ``` 
     pub fn get_clone<Q: ?Sized>(&self, key: &Q) -> Option<V> 
     where K: Borrow<Q>,
-          Q: Eq + Hash + Send,
+          Q: PartialEq + Hash + Send,
           V: Clone
     {
         let hash = self.hash(key);
@@ -792,7 +794,7 @@ fn get_data_node<'a, K: Send, V: Send>(node_ptr: *mut Node<K, V>) -> &'a DataNod
 }
 
 impl<K, V> Debug for HashMap<K, V> 
-where K: Eq + Hash + Send + Debug,
+where K: PartialEq + Hash + Send + Debug,
       V: Send + Debug
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -826,8 +828,8 @@ where K: Eq + Hash + Send + Debug,
 }
 
 impl<K, V> Default for HashMap<K, V>
-where K: Eq + Hash + Send,
-      V: Eq + Send 
+where K: PartialEq + Hash + Send,
+      V: PartialEq + Send 
 {
     fn default() -> Self {
         HashMap::new()
