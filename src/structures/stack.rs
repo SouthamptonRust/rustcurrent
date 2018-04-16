@@ -83,10 +83,8 @@ impl<T: Send> Stack<T> {
             if thread_info_ptr.is_null() {
                 thread_info_ptr = Box::into_raw(Box::new(ThreadInfo::new(Some(node_ptr), OpType::Push)));
             }
-            //println!("Trying elimination");
             match self.elimination.try_eliminate(thread_info_ptr, OpType::Push) {
                 Ok(_) => {
-                    //println!("Eliminated");
                     return
                 },
                 Err(_) => {}
@@ -374,6 +372,17 @@ fn is_complimentary<T: Send>(them_id: usize, them_ptr: *mut ThreadInfo<T>,
     }
 
     false
+}
+
+impl<T: Send> Drop for EliminationLayer<T> {
+    fn drop(&mut self) {
+        for guard in self.location.iter() {
+            let ptr = guard.data().load(Relaxed);
+            if !ptr.is_null() {
+                unsafe { Box::from_raw(ptr) };
+            }
+        }
+    }
 }
 
 impl<T: Send> ThreadInfo<T> {

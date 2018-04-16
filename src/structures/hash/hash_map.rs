@@ -773,6 +773,10 @@ impl<K: Hash + Send, V: Send> HashMap<K, V> {
             Err(current) => Err(current)
         }
     }
+
+    pub fn iter(&self) -> Iter<K, V> {
+        Iter::new(&self.head, &self.manager)
+    }
 }
 
 fn get_bucket<'a, K: Send, V: Send>(node_ptr: *mut Node<K, V>) -> &'a Vec<AtomicMarkablePtr<Node<K, V>>> {
@@ -825,6 +829,99 @@ where K: PartialEq + Hash + Send + Debug,
 
         write!(f, "{}", string)
     }
+}
+
+pub struct Iter<'a, K: Send + 'a, V: Send + 'a> {
+    current_array: &'a Vec<AtomicMarkablePtr<Node<K, V>>>,
+    index: usize,
+    node_stack: Vec<&'a Vec<AtomicMarkablePtr<Node<K, V>>>>,
+    manager: &'a HPBRManager<Node<K, V>>
+}
+
+impl<'a, K: Send, V: Send> Iter<'a, K, V> {
+    fn new(start: &'a Vec<AtomicMarkablePtr<Node<K, V>>>, manager: &'a HPBRManager<Node<K, V>>) -> Self {
+        Self {
+            current_array: start,
+            index: 0,
+            node_stack: Vec::new(),
+            manager
+        }
+    }
+}
+
+impl<'a, K: Send, V: Send> Iterator for Iter<'a, K, V> {
+    type Item = DataGuard<'a, V, Node<K, V>>;
+    fn next(&mut self) -> Option<Self::Item> {
+        let index = self.index;
+        self.index += 1;
+        if index < self.current_array.len() {
+            // Check if data or array
+            match self.current_array[index].get_ptr() {
+                Some(mut node_ptr) => {
+                    // Protect with a HPHandle
+                    if atomic_markable::is_marked(node_ptr) {
+                        // Protect
+                        let mut hphandle = self.manager.protect_dynamic(atomic_markable::unmark(node_ptr));
+                        // need to loop here
+                        while Some(node_ptr) != self.current_array[index].get_ptr() {
+                            let new_node = self.current_array[index].get_ptr();
+                            match new_node {
+                                None => return self.next(),
+                                Some(new_ptr) => {
+                                    hphandle = self.manager.protect_dynamic(atomic_markable::unmark(atomic_markable::unmark_second(node_ptr)));
+                                    if atomic_markable::is_marked_second(new_ptr) {
+                                        let bucket = get_bucket(new_ptr);
+                                        self.node_stack.push(bucket);
+                                        return self.next()
+                                    }
+                                    node_ptr = new_ptr;
+                                }
+                            }
+                        }
+                        let data_node = get_data_node(atomic_markable::unmark(node_ptr));
+                        Some(DataGuard::new(&data_node.value.as_ref().unwrap(), hphandle))
+                    } else if atomic_markable::is_marked_second(node_ptr) {
+                        let bucket = get_bucket(node_ptr);
+                        self.node_stack.push(bucket);
+                        return self.next()
+                    } else {
+                        let mut hphandle = self.manager.protect_dynamic(node_ptr);
+                        while Some(node_ptr) != self.current_array[index].get_ptr() {
+                            let new_node = self.current_array[index].get_ptr();
+                            match new_node {
+                                None => return self.next(),
+                                Some(new_ptr) => {
+                                    hphandle = self.manager.protect_dynamic(atomic_markable::unmark(atomic_markable::unmark_second(node_ptr)));
+                                    if atomic_markable::is_marked_second(new_ptr) {
+                                        let bucket = get_bucket(new_ptr);
+                                        self.node_stack.push(bucket);
+                                        return self.next()
+                                    }
+                                    node_ptr = new_ptr;
+                                }
+                            }
+                        }
+
+                        let data_node = get_data_node(atomic_markable::unmark(node_ptr));
+                        Some(DataGuard::new(&data_node.value.as_ref().unwrap(), hphandle))
+                    }
+                },
+                None => {
+                    return self.next()
+                }
+            }
+        } else {
+            match self.node_stack.pop() {
+                Some(array) => {
+                    self.index = 0;
+                    self.current_array = array;
+                    return self.next()
+                },
+                None => None
+            }
+        }
+    }
+
 }
 
 impl<K, V> Default for HashMap<K, V>
