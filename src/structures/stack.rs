@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicPtr, Ordering::{Relaxed, Release, Acquire}};
 use std::ptr;
 use std::collections;
 use super::HashMap;
@@ -53,7 +53,7 @@ impl<T: Send> Stack<T> {
     pub fn new(elimination_on: bool) -> Stack<T> {
         Stack {
             head: AtomicPtr::default(),
-            elimination: EliminationLayer::new(),
+            elimination: EliminationLayer::new(5),
             manager: HPBRManager::new(200, 1),
             elimination_on
         }
@@ -83,11 +83,11 @@ impl<T: Send> Stack<T> {
     }
 
     fn try_push(&self, mut node: Box<Node<T>>) -> Result<(), Box<Node<T>>> {
-        let old_head = self.head.load(Ordering::Acquire);
+        let old_head = self.head.load(Acquire);
         node.next = AtomicPtr::new(old_head);
 
         let node_ptr = Box::into_raw(node);
-        match self.head.compare_exchange_weak(old_head, node_ptr, Ordering::AcqRel, Ordering::Acquire) {
+        match self.head.compare_exchange(old_head, node_ptr, Release, Relaxed) {
             Ok(_) => Ok(()),
             Err(_) => {
                 unsafe {
@@ -119,17 +119,17 @@ impl<T: Send> Stack<T> {
     }
 
     fn try_pop(&self) -> Result<Option<T>, ()> {
-        let old_head = self.head.load(Ordering::Acquire);
+        let old_head = self.head.load(Acquire);
         if old_head.is_null() {
             return Ok(None)
         }
         unsafe {
             self.manager.protect(old_head, 0);
-            if !ptr::eq(old_head, self.head.load(Ordering::Acquire)) {
+            if !ptr::eq(old_head, self.head.load(Acquire)) {
                 return Err(())
             }
-            let new_head = (*old_head).next.load(Ordering::Acquire);
-            match self.head.compare_exchange_weak(old_head, new_head, Ordering::AcqRel, Ordering::Acquire) {
+            let new_head = (*old_head).next.load(Acquire);
+            match self.head.compare_exchange_weak(old_head, new_head, Release, Relaxed) {
                 Err(_) => Err(()),
                 Ok(old_head) => {
                     let old_head_val = ptr::replace(old_head, Node::default());
@@ -146,10 +146,10 @@ impl<T: Send> Drop for Stack<T> {
     // We can assume that when drop is called, the program holds no more references to the stack
     // This means we can walk the stack, freeing all the data within
     fn drop(&mut self) {
-        let mut current = self.head.load(Ordering::Relaxed);
+        let mut current = self.head.load(Relaxed);
         while !ptr::eq(current, ptr::null()) {
             unsafe {
-                let next = (*current).next.load(Ordering::Relaxed);
+                let next = (*current).next.load(Relaxed);
                 Box::from_raw(current);
                 current = next;
             }
@@ -184,6 +184,7 @@ impl<T: Send> Default for Node<T> {
 
 struct EliminationLayer<T: Send> {
     location: HashMap<ThreadId, AtomicPtr<ThreadInfo<T>>>,
+    collision: Vec<AtomicPtr<ThreadId>>,
     rng: UnsafeCell<SmallRng>,
     manager: HPBRManager<ThreadInfo<T>>
 }
@@ -191,34 +192,164 @@ struct EliminationLayer<T: Send> {
 struct ThreadInfo<T: Send> {
     id: ThreadId,
     op: OpType,
-    node: Option<Node<T>>
+    node: Option<Box<Node<T>>>
 }
 
+#[derive(Copy)]
+#[derive(Clone)]
 enum OpType {
     Push,
     Pop
 }
 
 impl<T: Send> EliminationLayer<T> {
-    fn new() -> Self {
+    fn new(collision_size: usize) -> Self {
+        let mut collision = Vec::with_capacity(collision_size);
+        for _ in 0..collision_size {
+            collision.push(AtomicPtr::default())
+        }
         Self {
             location: HashMap::new(),
+            collision,
             rng: UnsafeCell::new(SmallRng::new()),
-            manager: HPBRManager::new(100, 1)
+            manager: HPBRManager::new(100, 2)
         }
     }
 
     fn try_eliminate(&self, node: Option<Box<Node<T>>>, op: OpType) -> Result<Option<T>, Option<Box<Node<T>>>> {
+        let thread_info = ThreadInfo::new(node, op);
+        let me_info_ptr = Box::into_raw(Box::new(thread_info));
+        let me = thread::current().id();
+
+        match self.location.get(&me) {
+            None => {
+                match self.location.insert(me.clone(), AtomicPtr::new(me_info_ptr)) {
+                    Ok(()) => {},
+                    Err(_) => {
+                        let mut thread_info_boxed = unsafe { Box::from_raw(me_info_ptr) };
+                        let node = mem::replace(&mut (*thread_info_boxed).node, None);
+                        return Err(node)
+                    }
+                }
+            },
+            Some(data_guard) => {
+                data_guard.data().store(me_info_ptr, Release);
+            }
+        }
+
+        let position = self.get_position();
+
+        let mut them_ptr = self.collision[position].load(Acquire);
+        let me_ptr = Box::into_raw(Box::new(me.clone()));
+        while let Err(current) = self.collision[position].compare_exchange(them_ptr, me_ptr, Release, Relaxed) {
+            them_ptr = current;
+        }
+
+        if !them_ptr.is_null() {
+            let them = unsafe { *them_ptr };
+            match self.location.get(&them) {
+                None => {},
+                Some(data_guard) => {
+                    let them_info_ptr = data_guard.data().load(Acquire);
+                    if is_complimentary(them, them_info_ptr, op) {
+                        let me_atomic = self.location.get(&me).unwrap().data();
+                        match me_atomic.compare_exchange(me_info_ptr, ptr::null_mut(), Release, Relaxed) {
+                            Ok(_) => {
+                                return self.try_collision(me_info_ptr, them_info_ptr, data_guard.data())
+                            },
+                            Err(current) => {
+                                return self.finish_collision(current, op)
+                            }
+                        }                        
+                    } 
+                }
+            }
+        }
+
+        // Delay goes here
+        // Passive elimination goes here
         Ok(None)
     }
+
+    fn get_position(&self) -> usize {
+        let rand = unsafe { &mut *self.rng.get() };
+        rand.gen_range(0, self.collision.len())
+    }
+
+    fn try_collision(&self, me_ptr: *mut ThreadInfo<T>, them_ptr: *mut ThreadInfo<T>, them_atomic: &AtomicPtr<ThreadInfo<T>>)
+            -> Result<Option<T>, Option<Box<Node<T>>>> 
+    {
+        let me = unsafe { &*me_ptr };
+        
+        match me.op {
+            OpType::Push => {
+                match them_atomic.compare_exchange(them_ptr, me_ptr, Release, Relaxed) {
+                    Ok(_) => {
+                        return Ok(None)
+                    },
+                    Err(_) => {
+                        // This might need to be retired with HPBRManager
+                        let mut boxed_node = unsafe { Box::from_raw(me_ptr) };
+                        let node = mem::replace(&mut (*boxed_node).node, None);
+                        return Err(node)
+                    }
+                }
+            },
+            OpType::Pop => {
+                match them_atomic.compare_exchange(them_ptr, ptr::null_mut(), Release, Relaxed) {
+                    Ok(_) => {
+                        let owned_info = unsafe { ptr::read(them_ptr) };
+                        let mut node = owned_info.node.unwrap();
+                        let value = mem::replace(&mut (*node).data, None);
+                        self.manager.retire(them_ptr, 0);
+                        return Ok(value)
+                    },
+                    Err(_) => {
+                        return Err(None)
+                    }
+                }
+            }
+        }
+    }
+
+    fn finish_collision(&self, new_info_ptr: *mut ThreadInfo<T>, me_op: OpType) -> Result<Option<T>, Option<Box<Node<T>>>> {
+        match me_op {
+            Push => {return Ok(None)},
+            Pop => {
+                let owned_info = unsafe { ptr::read(new_info_ptr) };
+                let mut node = owned_info.node.unwrap();
+                let value = mem::replace(&mut (*node).data, None);
+                self.manager.retire(new_info_ptr, 0);
+                return Ok(value)
+            }
+        }
+    } 
+}
+
+fn is_complimentary<T: Send>(them_id: ThreadId, them_ptr: *mut ThreadInfo<T>, me_op: OpType) -> bool {
+    if them_ptr.is_null() {
+        return false
+    }
+    
+    let them_info = unsafe { &*them_ptr };
+
+    if them_id == them_info.id {
+        return match (them_info.op, me_op) {
+            (OpType::Pop, OpType::Push) => true,
+            (OpType::Push, OpType::Pop) => true,
+            _ => false
+        }
+    }
+
+    false
 }
 
 impl<T: Send> ThreadInfo<T> {
-    fn new(node: Node<T>, op: OpType) -> Self {
+    fn new(node: Option<Box<Node<T>>>, op: OpType) -> Self {
         Self {
             id: thread::current().id(),
             op,
-            node: Some(node)
+            node
         }
     }
 }
