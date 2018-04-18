@@ -638,4 +638,75 @@ mod tests {
         println!("{:?}", counter);
         assert_eq!(counter, 2500);
     }
+
+    #[test]
+    fn test_intersection_semantics() {
+        let set: HashSet<u32> = HashSet::new();
+        let other_set: HashSet<u32> = HashSet::new();
+
+        let _ = set.insert(54);
+        let _ = set.insert(32);
+        let _ = set.insert(27);
+        let _ = set.insert(89);
+
+        let _ = other_set.insert(54);
+        let _ = other_set.insert(32);
+
+        let expected = vec![54, 32];
+        let mut size = 0;
+        for i in set.intersection(&other_set) {
+            assert!(expected.contains(i.data()));
+            size += 1;
+        }
+
+        assert_eq!(size, expected.len());
+    }
+
+    #[test]
+    fn test_union_semantics() {
+        let set: HashSet<u32> = HashSet::new();
+        let other_set: HashSet<u32> = HashSet::new();
+
+        let _ = set.insert(54);
+        let _ = set.insert(32);
+        let _ = set.insert(27);
+        let _ = set.insert(89);
+
+        let _ = other_set.insert(77);
+        let _ = other_set.insert(456);
+
+        let expected = vec![54, 32, 27, 89, 77, 456];
+        let mut size = 0;
+        for i in set.union(&other_set) {
+            assert!(expected.contains(i.data()));
+            size += 1;
+        }
+        assert_eq!(size, expected.len());
+    }
+
+    #[test]
+    fn test_difference_semantics() {
+        let set: HashSet<u32> = HashSet::new();
+        let other_set: HashSet<u32> = HashSet::new();
+
+        let _ = set.insert(54);
+        let _ = set.insert(32);
+        let _ = set.insert(27);
+        let _ = set.insert(89);
+
+        let _ = other_set.insert(77);
+        let _ = other_set.insert(456);
+        let _ = other_set.insert(54);
+        let _ = other_set.insert(32);
+
+        let expected = vec![27, 89];
+        let mut size = 0;
+        for i in set.difference(&other_set) {
+            println!("{}", i.data());
+            assert!(expected.contains(i.data()));
+            size += 1;
+        }
+
+        assert_eq!(size, expected.len());
+    }
 }
