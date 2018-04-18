@@ -538,6 +538,7 @@ mod tests {
     use std::collections;
 
     #[test]
+    #[ignore]
     fn test_single_threaded() {
         let set: HashSet<u32> = HashSet::new();
 

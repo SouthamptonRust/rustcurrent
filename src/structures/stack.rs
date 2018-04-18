@@ -324,6 +324,7 @@ impl<T: Send> EliminationLayer<T> {
                         let mut owned_info = unsafe { ptr::read(them_ptr) };
                         let mut node_ptr = mem::replace(&mut owned_info.node, None).unwrap();
                         let node = unsafe { ptr::replace(node_ptr, Node::default()) };
+                        unsafe { Box::from_raw(node_ptr) };
                         self.manager.retire(them_ptr, 0);
                         me_atomic.store(ptr::null_mut(), Release);
                         return Ok(node.data)
@@ -344,6 +345,7 @@ impl<T: Send> EliminationLayer<T> {
                 let mut owned_info = unsafe { ptr::read(new_info_ptr) };
                 let mut node_ptr = mem::replace(&mut owned_info.node, None).unwrap();
                 let node = unsafe { ptr::replace(node_ptr, Node::default()) };
+                unsafe { Box::from_raw(node_ptr) };
                 self.location.get(&get_id()).unwrap().data().store(ptr::null_mut(), Release);
                 self.manager.retire(new_info_ptr, 0);
                 return Ok(node.data)
