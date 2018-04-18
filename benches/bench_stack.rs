@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 fn bench_rustcurrent_stack(num_threads: usize, elim: bool) {
-    let stack = Arc::new(Stack::new(elim));
+    let stack = Arc::new(Stack::new_with_collision_size(elim, num_threads / 2));
     let mut wait_vec: Vec<JoinHandle<()>> = Vec::new();
 
     for _ in 0..num_threads * 2 {
@@ -68,7 +68,7 @@ fn bench_locked_stack(num_threads: usize) {
 }
 
 fn bench_mp_sc(num_threads: usize, elim: bool) {
-    let stack = Arc::new(Stack::new(true));
+    let stack = Arc::new(Stack::new_with_collision_size(elim, num_threads / 2));
     let mut wait_vec = Vec::new();
     
     let amount = 10000 / num_threads;
@@ -138,7 +138,7 @@ fn bench_mp_sc_lock(num_threads: usize) {
 }
 
 fn bench_sp_mc(num_threads: usize, elim: bool) {
-    let stack = Arc::new(Stack::new(true));
+    let stack = Arc::new(Stack::new_with_collision_size(elim, num_threads / 2));
     let mut wait_vec = Vec::new();
     
     let amount = 10000 / num_threads;

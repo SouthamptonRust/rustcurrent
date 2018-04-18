@@ -57,6 +57,15 @@ impl<T: Send> Stack<T> {
         }
     }
 
+    pub fn new_with_collision_size(elimination_on: bool, collision_size: usize) -> Self {
+        Self {
+            head: AtomicPtr::default(),
+            elimination: EliminationLayer::new(collision_size),
+            manager: HPBRManager::new(200, 1),
+            elimination_on
+        }
+    }
+
     /// Push a piece of data onto the stack. This operation blocks until success,
     /// which is guaranteed by the lock-free data structure.
     /// # Examples
@@ -159,6 +168,17 @@ impl<T: Send> Stack<T> {
 
 fn get_id() -> usize {
     unsafe { mem::transmute::<ThreadId, u64>(thread::current().id()) as usize } 
+}
+
+impl<T: Send> Default for Stack<T> {
+    fn default() -> Self {
+        Self {
+            head: AtomicPtr::default(),
+            elimination: EliminationLayer::new(5),
+            manager: HPBRManager::new(200, 1),
+            elimination_on: false
+        }
+    }
 }
 
 impl<T: Send> Drop for Stack<T> {
