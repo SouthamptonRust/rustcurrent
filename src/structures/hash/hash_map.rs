@@ -164,6 +164,7 @@ impl<K: Hash + Send, V: Send> HashMap<K, V> {
                             Ok(_) => { return Ok(()) },
                             Err(old) => {
                                 node = bucket[pos].get_ptr();
+                                fail_count += 1;
                                 old
                             } 
                         }
@@ -1097,7 +1098,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_multithreaded_insert() {
         let map: Arc<HashMap<u16, String>> = Arc::new(HashMap::new());
         let mut wait_vec: Vec<thread::JoinHandle<()>> = Vec::new();
@@ -1137,7 +1137,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_typical() {
         let map: Arc<HashMap<u32, u32>> = Arc::default();
         let mut wait_vec: Vec<JoinHandle<()>> = Vec::new();

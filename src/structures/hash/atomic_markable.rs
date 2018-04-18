@@ -53,7 +53,9 @@ impl <T: Send> AtomicMarkablePtr<T> {
     }
 
     pub fn mark(&self) {
-        self.ptr.fetch_or(0x1, Release);
+        if !is_marked_second(self.ptr.load(Acquire) as *mut T) {
+            self.ptr.fetch_or(0x1, Release);
+        }
     }
 
     pub fn compare_and_mark(&self, old: *mut T) -> Result<*mut T, *mut T> {

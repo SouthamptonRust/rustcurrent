@@ -102,7 +102,10 @@ impl<T: Hash + Send> HashSet<T> {
                     None => {
                         data = match self.try_insert(&bucket[pos], ptr::null_mut(), hash, data) {
                             Ok(()) => return Ok(()),
-                            Err(old_data) => old_data
+                            Err(old_data) => {
+                                fail_count += 1;
+                                old_data
+                            }
                         }
                     },
                     Some(mut node_ptr) => {
@@ -747,5 +750,39 @@ mod tests {
         }
 
         println!("Threads joined.");
+    }
+
+    #[test]
+    fn test_typical_usage() {
+        let set_arc = Arc::new(HashSet::new());
+        let mut wait_vec = Vec::new();
+        
+        for _ in 0..10 {
+            let set = set_arc.clone();
+            wait_vec.push(thread::spawn(move || {
+                for i in 0..2500 {
+                    if !set.contains(&i) {
+                        let _ = set.insert(i);
+                    }
+                }
+            }));
+        }
+
+        for _ in 0..10 {
+            let set = set_arc.clone();
+            wait_vec.push(thread::spawn(move || {
+                for i in 0..2500 {
+                    if set.contains(&i) {
+                        let _ = set.remove(&i);
+                    }
+                }
+            }))
+        }
+
+        for handle in wait_vec {
+            if let Err(error) = handle.join() {
+                panic!("Could not join thread!: {:?}", error)
+            }
+        }
     }
 }
