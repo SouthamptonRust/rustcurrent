@@ -288,7 +288,7 @@ impl<T: Send> EliminationLayer<T> {
                 }
             }
         }
-        thread::sleep(Duration::new(0, 1000));
+        thread::sleep(Duration::new(0, 100));
         let me_atomic = self.location.get(&me_id).unwrap().data();
         match me_atomic.compare_exchange(me_info_ptr, ptr::null_mut(), Release, Relaxed) {
             Ok(_) => {
@@ -467,7 +467,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn stress_test_elimination() {
         let stack: Arc<Stack<u8>> = Arc::new(Stack::new(true));
         let mut waitvec: Vec<thread::JoinHandle<()>> = Vec::new();
