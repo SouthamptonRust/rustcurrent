@@ -1037,7 +1037,6 @@ mod tests {
     use std::thread;
     use std::thread::JoinHandle;
 
-    #[ignore]
     #[test]
     fn test_data_guard() {
         let map: HashMap<u8, u8> = HashMap::new();
@@ -1173,7 +1172,9 @@ mod tests {
                 //println!("done inserting");
                 for i in 0..1000 {
                     if i > 300 && i < 800 {
-                        assert_eq!(map_clone.get(&i).unwrap().data(), &i);
+                        if let Some(guard) = map_clone.get(&i) {
+                            assert_eq!(guard.data(), &i);
+                        }
                     }
                 }
                 //println!("done normal get");
@@ -1189,7 +1190,9 @@ mod tests {
         }
 
         for handle in wait_vec {
-            handle.join().unwrap();
+            if let Err(_) = handle.join() {
+                panic!("Could not join thread!")
+            }
         }
     }
 }

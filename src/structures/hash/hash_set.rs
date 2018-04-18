@@ -607,7 +607,6 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    #[ignore]
     fn test_single_threaded() {
         let set: HashSet<u32> = HashSet::new();
 
@@ -753,14 +752,14 @@ mod tests {
     }
 
     #[test]
-    fn test_typical_usage() {
+    fn stress_test() {
         let set_arc = Arc::new(HashSet::new());
         let mut wait_vec = Vec::new();
         
         for _ in 0..10 {
             let set = set_arc.clone();
             wait_vec.push(thread::spawn(move || {
-                for i in 0..2500 {
+                for i in 0..25000 {
                     if !set.contains(&i) {
                         let _ = set.insert(i);
                     }
@@ -771,7 +770,7 @@ mod tests {
         for _ in 0..10 {
             let set = set_arc.clone();
             wait_vec.push(thread::spawn(move || {
-                for i in 0..2500 {
+                for i in 0..25000 {
                     if set.contains(&i) {
                         let _ = set.remove(&i);
                     }

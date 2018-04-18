@@ -81,11 +81,13 @@ impl<T: Send> Stack<T> {
             if thread_info_ptr.is_null() {
                 thread_info_ptr = Box::into_raw(Box::new(ThreadInfo::new(Some(node_ptr), OpType::Push)));
             }
-            match self.elimination.try_eliminate(thread_info_ptr, OpType::Push) {
-                Ok(_) => {
-                    return
-                },
-                Err(_) => {}
+            if self.elimination_on {
+                match self.elimination.try_eliminate(thread_info_ptr, OpType::Push) {
+                    Ok(_) => {
+                        return
+                    },
+                    Err(_) => {}
+                }
             }
         }
     }
@@ -399,10 +401,12 @@ impl<T: Send> ThreadInfo<T> {
 mod tests {
     #![allow(unused_imports)]
     use super::Stack;
+    use super::get_id;
     use std::sync::atomic::Ordering;
-    use std::thread;
+    use std::{thread, thread::ThreadId};
     use std::sync::Arc;
     use std::cell::RefCell;
+    use std::mem;
 
     #[derive(Debug)]
     #[derive(PartialEq)]
@@ -452,18 +456,16 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_thread_id() {
-        for i in 0..10 {
-            thread::spawn(|| {
-                println!("{:?}", thread::current().id());
-            });
-        }
+        let threadid = thread::current().id();
+        let num_id = get_id();
+
+        assert_eq!(unsafe { mem::transmute::<usize, ThreadId>(num_id) }, threadid);
+        assert_eq!(get_id(), unsafe { mem::transmute::<ThreadId, usize>(threadid) });
     }
 
     #[test]
-    #[test]
-    fn test_elimination_no_segfault() {
+    fn stress_test_elimination() {
         let stack: Arc<Stack<u8>> = Arc::new(Stack::new(true));
         let mut waitvec: Vec<thread::JoinHandle<()>> = Vec::new();
         for _ in 0..20 {
