@@ -601,6 +601,7 @@ mod tests {
     use std::thread;
     use std::thread::JoinHandle;
     use std::collections;
+    use std::time::Duration;
 
     #[test]
     #[ignore]
@@ -708,5 +709,43 @@ mod tests {
         }
 
         assert_eq!(size, expected.len());
+    }
+
+    #[test]
+    fn test_multithreaded_iteration() {
+        // Goal here is to test for memory safety, should be protected from segfaults
+        let set: HashSet<u32> = HashSet::new();
+
+        for i in 0..2000 {
+            let _ = set.insert(i);
+        }
+
+        let set_arc = Arc::new(set);
+        let set_arc_clone = set_arc.clone();
+        let mut wait_vec = Vec::new();
+
+        wait_vec.push(thread::spawn(move || {
+            for i in set_arc_clone.iter() {
+                thread::sleep(Duration::new(0, *i.data() * 1000));
+            }
+        }));
+
+        let set_arc_other = set_arc.clone();
+        wait_vec.push(thread::spawn(move || {
+            for i in 0..2000 {
+                if i % 2 == 0 {
+                    let _ = set_arc_other.remove(&i);
+                }
+            }
+        }));
+
+        for handle in wait_vec {
+            match handle.join() {
+                Ok(_) => {},
+                Err(error) => { panic!("Could not join thread!: {:?}", error)}
+            }
+        }
+
+        println!("Threads joined.");
     }
 }
