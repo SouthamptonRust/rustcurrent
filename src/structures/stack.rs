@@ -317,6 +317,7 @@ impl<T: Send> EliminationLayer<T> {
                         return Ok(None)
                     },
                     Err(_) => {
+                        self.manager.unprotect(0);
                         return Err(())
                     }
                 }
@@ -456,6 +457,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_thread_id() {
         let threadid = thread::current().id();
         let num_id = get_id();
@@ -465,15 +467,17 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn stress_test_elimination() {
         let stack: Arc<Stack<u8>> = Arc::new(Stack::new(true));
         let mut waitvec: Vec<thread::JoinHandle<()>> = Vec::new();
-        for _ in 0..20 {
+        for thread_no in 0..20 {
             let stack_copy = stack.clone();
             waitvec.push(thread::spawn(move || {
                 for i in 0..10000 {
                     stack_copy.push(2);
                 }
+                println!("push thread {} complete", thread_no);
             }));
         }
         for thread_no in 0..20 {
@@ -487,6 +491,7 @@ mod tests {
                         }
                     }
                 }
+                println!("pop thread {} finished", thread_no);
             }));
         }
         for handle in waitvec {
