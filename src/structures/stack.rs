@@ -124,6 +124,7 @@ impl<T: Send> Stack<T> {
             }
             if self.elimination_on {
                 if let Ok(val) = self.elimination.try_eliminate(thread_info_ptr, OpType::Pop) {
+                    unsafe { Box::from_raw(thread_info_ptr) };
                     return val
                 }
             }
