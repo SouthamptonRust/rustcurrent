@@ -1,12 +1,10 @@
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering::{Relaxed, Release, Acquire}};
 use std::ptr;
-use std::collections;
 use super::HashMap;
 use std::{thread, thread::ThreadId};
 use std::time::Duration;
 use std::cell::UnsafeCell;
 use rand::{Rng, SmallRng, NewRng};
-use rand;
 use memory::HPBRManager;
 use std::mem;
 
@@ -341,7 +339,7 @@ impl<T: Send> EliminationLayer<T> {
 
     fn finish_collision(&self, new_info_ptr: *mut ThreadInfo<T>, me_op: OpType) -> Result<Option<T>, ()> {
         match me_op {
-            OpType::Push => {return Ok(None)},
+            OpType::Push => { return Ok(None) },
             OpType::Pop => {
                 let mut owned_info = unsafe { ptr::read(new_info_ptr) };
                 let mut node_ptr = mem::replace(&mut owned_info.node, None).unwrap();

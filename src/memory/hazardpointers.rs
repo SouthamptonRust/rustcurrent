@@ -1,5 +1,5 @@
+#![allow(unused_assignments)]
 use std::sync::atomic::{AtomicPtr, Ordering, AtomicBool};
-use std::sync::atomic;
 use std::fmt::Debug;
 use thread_local::CachedThreadLocal;
 use std::collections::{VecDeque, HashSet};

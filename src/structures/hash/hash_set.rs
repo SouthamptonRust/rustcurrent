@@ -537,6 +537,7 @@ mod tests {
     use std::thread::JoinHandle;
     use std::collections;
 
+    #[test]
     fn test_single_threaded() {
         let set: HashSet<u32> = HashSet::new();
 

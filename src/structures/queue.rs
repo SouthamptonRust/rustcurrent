@@ -66,7 +66,7 @@ impl<T: Send> Queue<T> {
                 Ok(_) => { return; },
                 Err(old_node) => old_node
             };
-            //backoff = self.backoff(backoff);
+            backoff = self.backoff(backoff);
         }
     }
 
@@ -116,7 +116,7 @@ impl<T: Send> Queue<T> {
             if let Ok(val) = self.try_dequeue() {
                 return val
             }
-            //backoff = self.backoff(backoff);
+            backoff = self.backoff(backoff);
         }
     }
 
