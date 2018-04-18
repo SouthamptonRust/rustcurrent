@@ -2,6 +2,7 @@ use std::hash::{Hash, Hasher, BuildHasher};
 use std::ptr;
 use std::borrow::Borrow;
 use std::collections::hash_map::RandomState;
+use std::iter::Chain;
 use memory::HPBRManager;
 use super::atomic_markable::AtomicMarkablePtr;
 use super::atomic_markable;
@@ -369,6 +370,26 @@ impl<T: Hash + Send> HashSet<T> {
     pub fn iter(&self) -> Iter<T> {
         Iter::new(&self.head, &self.manager)
     }
+
+    pub fn difference<'a>(&'a self, other: &'a Self) -> Difference<'a, T> {
+        Difference {
+            iter: Iter::new(&self.head, &self.manager),
+            other
+        }
+    }
+
+    pub fn intersection<'a>(&'a self, other: &'a Self) -> Intersection<'a, T> {
+        Intersection {
+            iter: Iter::new(&self.head, &self.manager),
+            other
+        }
+    }
+
+    pub fn union<'a>(&'a self, other: &'a Self) -> Union<'a, T> {
+        Union {
+            iter: self.iter().chain(other.difference(self))
+        }
+    }
 }
 
 fn get_bucket<'a, T: Send>(node_ptr: *mut Node<T>) -> &'a Vec<AtomicMarkablePtr<Node<T>>> {
@@ -396,6 +417,51 @@ pub struct Iter<'a, T: Send + 'a> {
     manager: &'a HPBRManager<Node<T>>
 }
 
+pub struct Difference<'a, T: Send + Hash + 'a> {
+    iter: Iter<'a, T>,
+    other: &'a HashSet<T>
+}
+
+pub struct Intersection<'a, T: Send + Hash + 'a> {
+    iter: Iter<'a, T>,
+    other: &'a HashSet<T>
+}
+
+pub struct Union<'a, T: Send + Hash + 'a> {
+    iter: Chain<Iter<'a, T>, Difference<'a, T>>
+}
+
+impl<'a, T: Send + Hash + 'a> Iterator for Difference<'a, T> {
+    type Item = DataGuard<'a, T, Node<T>>;
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let data = self.iter.next()?;
+            if !self.other.contains(data.data()) {
+                return Some(data)
+            }
+        }
+    }
+}
+
+impl<'a, T: Send + Hash + 'a> Iterator for Intersection<'a, T> {
+    type Item = DataGuard<'a, T, Node<T>>;
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let data = self.iter.next()?;
+            if self.other.contains(data.data()) {
+                return Some(data)
+            }
+        }
+    }
+}
+
+impl<'a, T: Send + Hash + 'a> Iterator for Union<'a, T> {
+    type Item = DataGuard<'a, T, Node<T>>;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next()
+    }
+}
+
 impl<'a, T:Send> Iter<'a, T> {
     fn new(start: &'a Vec<AtomicMarkablePtr<Node<T>>>, manager: &'a HPBRManager<Node<T>>) -> Self {
         Self {
@@ -420,7 +486,6 @@ impl<'a, T: Send> Iterator for Iter<'a, T> {
                     if atomic_markable::is_marked(node_ptr) {
                         // Protect
                         let mut hphandle = self.manager.protect_dynamic(atomic_markable::unmark(node_ptr));
-                        // need to loop here
                         while Some(node_ptr) != self.current_array[index].get_ptr() {
                             let new_node = self.current_array[index].get_ptr();
                             match new_node {
