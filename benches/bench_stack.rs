@@ -223,5 +223,17 @@ fn bench_lock_sp_mc(c: &mut Criterion) {
     c.bench_function_over_inputs("stack_sp_mc_elim", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_sp_mc_lock(*num_threads)), (2..42).filter(|num| num % 2 == 0).collect::<Vec<usize>>());
 }
 
+fn bench_no_elim_equal(c: &mut Criterion) {
+    c.bench_function_over_inputs("stack_equal_no_elim", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_rustcurrent_stack(*num_threads, false)), (2..42).filter(|num| num % 2 == 0).collect::<Vec<usize>>());
+}
+
+fn bench_no_elim_mp_sc(c: &mut Criterion) {
+    c.bench_function_over_inputs("stack_mp_sc_no_elim", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_mp_sc(*num_threads, false)), (2..42).filter(|num| num % 2 == 0).collect::<Vec<usize>>());
+}
+
+fn bench_no_elim_sp_mc(c: &mut Criterion) {
+    c.bench_function_over_inputs("stack_sp_mc_no_elim", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_sp_mc(*num_threads, false)), (2..42).filter(|num| num % 2 == 0).collect::<Vec<usize>>());
+}
+
 criterion_group!(benches, bench_lock_mp_sc, bench_elim_mp_sc, bench_lock_sp_mc, bench_elim_sp_mc);
 criterion_main!(benches);
