@@ -10,8 +10,8 @@ use std::thread;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
-fn bench_queue_equal_lock(num_threads: usize) {
-    let queue: Arc<Mutex<VecDeque<u32>>> = Arc::default();
+fn bench_equal_lock(num_threads: usize) {
+    let queue = Arc::new(Mutex::new(VecDeque::new()));
     let mut wait_vec: Vec<JoinHandle<()>> = Vec::new();
 
     for _ in 0..num_threads / 2 {
@@ -42,8 +42,8 @@ fn bench_queue_equal_lock(num_threads: usize) {
     }
 }
 
-fn bench_queue_equal(num_threads: usize) {
-    let queue: Arc<Queue<u32>> = Arc::new(Queue::new());
+fn bench_equal(num_threads: usize) {
+    let queue = Arc::new(Queue::new());
     let mut wait_vec: Vec<JoinHandle<()>> = Vec::new();
 
     for _ in 0..num_threads / 2 {
@@ -141,7 +141,7 @@ fn bench_mp_sc(num_threads: usize) {
 }
 
 fn bench_sp_mc_lock(num_threads: usize) {
-    let queue = Arc::new(Mutex::new(VecQueue::new()));
+    let queue = Arc::new(Mutex::new(VecDeque::new()));
     let mut wait_vec = Vec::new();
 
     let amount = 10000 / num_threads;
@@ -155,8 +155,9 @@ fn bench_sp_mc_lock(num_threads: usize) {
     }));
 
     for _ in 0..num_threads - 1 {
+        q = queue.clone();
         wait_vec.push(thread::spawn(move || {
-            for _ in amount {
+            for _ in 0..amount {
                 loop {
                     match q.lock().unwrap().pop_back() {
                         Some(val) => break,
@@ -182,11 +183,12 @@ fn bench_sp_mc(num_threads: usize) {
     let mut q = queue.clone();
     wait_vec.push(thread::spawn(move || {
         for i in 0..producer_num {
-            queue.enqueue(i);
+            q.enqueue(i);
         }
     }));
 
     for _ in 0..num_threads - 1 {
+        q = queue.clone();
         wait_vec.push(thread::spawn(move || {
             for _ in 0..amount {
                 loop {
@@ -205,11 +207,11 @@ fn bench_sp_mc(num_threads: usize) {
 }
 
 fn bench_queue_equal_lock(c: &mut Criterion) {
-    c.bench_function_over_inputs("queue_equal", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_queue_equal_lock(*num_threads)), (2..42).filter(|num| num % 2 == 0).collect::<Vec<usize>>());
+    c.bench_function_over_inputs("queue_equal", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_equal_lock(*num_threads)), (2..42).filter(|num| num % 2 == 0).collect::<Vec<usize>>());
 }
 
 fn bench_queue_equal(c: &mut Criterion) {
-    c.bench_function_over_inputs("queue_equal", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_queue_equal(*num_threads)), (2..42).filter(|num| num % 2 == 0).collect::<Vec<usize>>());
+    c.bench_function_over_inputs("queue_equal", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_equal(*num_threads)), (2..42).filter(|num| num % 2 == 0).collect::<Vec<usize>>());
 }
 
 fn bench_queue_mp_sc_lock(c: &mut Criterion) {
