@@ -72,8 +72,7 @@ fn bench_mp_sc(num_threads: usize, elim: bool) {
     let mut wait_vec = Vec::new();
     
     let amount = 10000 / num_threads;
-    let consumer_num = amount * (num_threads * 1);
-
+    let consumer_num = amount * (num_threads - 1);
 
     let mut s = stack.clone();
     wait_vec.push(thread::spawn(move || {
@@ -91,9 +90,7 @@ fn bench_mp_sc(num_threads: usize, elim: bool) {
         s = stack.clone();
         wait_vec.push(thread::spawn(move || {
             for i in 0..amount {
-                loop {
-                    s.push(i);
-                }
+                s.push(i);
             }
         }))
     }
@@ -108,8 +105,7 @@ fn bench_mp_sc_lock(num_threads: usize) {
     let mut wait_vec = Vec::new();
     
     let amount = 10000 / num_threads;
-    let consumer_num = amount * (num_threads * 1);
-
+    let consumer_num = amount * (num_threads - 1);
 
     let mut s = stack.clone();
     wait_vec.push(thread::spawn(move || {
@@ -142,7 +138,7 @@ fn bench_sp_mc(num_threads: usize, elim: bool) {
     let mut wait_vec = Vec::new();
     
     let amount = 10000 / num_threads;
-    let producer_num = amount * (num_threads * 1);
+    let producer_num = amount * (num_threads - 1);
 
     for _ in 0..(num_threads - 1) {
         let s = stack.clone();
@@ -175,7 +171,7 @@ fn bench_sp_mc_lock(num_threads: usize) {
     let mut wait_vec = Vec::new();
     
     let amount = 10000 / num_threads;
-    let producer_num = amount * (num_threads * 1);
+    let producer_num = amount * (num_threads - 1);
 
     for _ in 0..(num_threads - 1) {
         let s = stack.clone();
@@ -227,5 +223,5 @@ fn bench_lock_sp_mc(c: &mut Criterion) {
     c.bench_function_over_inputs("stack_sp_mc_elim", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_sp_mc_lock(*num_threads)), (2..42).filter(|num| num % 2 == 0).collect::<Vec<usize>>());
 }
 
-criterion_group!(benches, bench_lock_equal, bench_elim_equal, bench_elim_mp_sc, bench_lock_mp_sc, bench_elim_sp_mc, bench_lock_sp_mc);
+criterion_group!(benches, bench_lock_mp_sc, bench_elim_mp_sc, bench_lock_sp_mc, bench_elim_sp_mc);
 criterion_main!(benches);
