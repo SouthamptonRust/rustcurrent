@@ -10,7 +10,7 @@ use std::thread;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
-fn bench_queue_equal_lock(num_threads: usize) {
+fn bench_equal_lock(num_threads: usize) {
     let queue: Arc<Mutex<VecDeque<u32>>> = Arc::default();
     let mut wait_vec: Vec<JoinHandle<()>> = Vec::new();
 
@@ -42,8 +42,8 @@ fn bench_queue_equal_lock(num_threads: usize) {
     }
 }
 
-fn bench_seg_queue_equal(num_threads: usize) {
-    let queue: Arc<SegQueue<u32>> = Arc::new(SegQueue::new(32));
+fn bench_equal(num_threads: usize) {
+    let queue: Arc<SegQueue<u32>> = Arc::new(SegQueue::new(64));
     let mut wait_vec: Vec<JoinHandle<()>> = Vec::new();
 
     for _ in 0..num_threads / 2 {
@@ -108,7 +108,7 @@ fn bench_mp_sc_lock(num_threads: usize) {
 }
 
 fn bench_mp_sc(num_threads: usize) {
-    let queue = Arc::new(SegQueue::new());
+    let queue = Arc::new(SegQueue::new(64));
     let mut wait_vec = Vec::new();
 
     let amount = 10000 / num_threads;
@@ -173,7 +173,7 @@ fn bench_sp_mc_lock(num_threads: usize) {
 }
 
 fn bench_sp_mc(num_threads: usize) {
-    let queue = Arc::new(SegQueue::new());
+    let queue = Arc::new(SegQueue::new(64));
     let mut wait_vec = Vec::new();
 
     let amount = 10000 / num_threads;
@@ -204,36 +204,36 @@ fn bench_sp_mc(num_threads: usize) {
     }
 }
 
-fn bench_equal_all_lock(c: &mut Criterion) {
-    c.bench_function_over_inputs("seg_queue_equal", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_queue_equal_lock(*num_threads)),
-                                 vec![2, 4, 8, 16, 32, 64]);
+fn bench_seg_equal_lock(c: &mut Criterion) {
+    c.bench_function_over_inputs("seg_queue_equal", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_equal_lock(*num_threads)),
+                                 (2..42).filter(|num| num % 2 == 0).collect::<Vec<usize>>());
 }
 
-fn bench_equal_all(c: &mut Criterion) {
-    c.bench_function_over_inputs("seg_queue_equal", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_seg_queue_equal(*num_threads)),
-                                 vec![2, 4, 8, 16, 32, 64]);
+fn bench_seg_equal(c: &mut Criterion) {
+    c.bench_function_over_inputs("seg_queue_equal", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_equal(*num_threads)),
+                                 (2..42).filter(|num| num % 2 == 0).collect::<Vec<usize>>());
 }
 
-fn bench_mp_sc_all_lock(c: &mut Criterion) {
+fn bench_seg_mp_sc_lock(c: &mut Criterion) {
     c.bench_function_over_inputs("seg_queue_mp_sc", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_mp_sc_lock(*num_threads)), 
-                                 vec![2, 4, 8, 16, 32, 64]);
+                                 (2..42).filter(|num| num % 2 == 0).collect::<Vec<usize>>());
 }
 
-fn bench_mp_sc_all(c: &mut Criterion) {
+fn bench_seg_mp_sc(c: &mut Criterion) {
     c.bench_function_over_inputs("seg_queue_mp_sc", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_mp_sc(*num_threads)), 
-                                 vec![2, 4, 8, 16, 32, 64]);
+                                 (2..42).filter(|num| num % 2 == 0).collect::<Vec<usize>>());
 }
 
-fn bench_sp_mc_all_lock(c: &mut Criterion) {
+fn bench_seg_sp_mc_lock(c: &mut Criterion) {
     c.bench_function_over_inputs("seg_queue_sp_mc", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_sp_mc_lock(*num_threads)), 
-                                 vec![2, 4, 8, 16, 32, 64]);
+                                 (2..42).filter(|num| num % 2 == 0).collect::<Vec<usize>>());
 }
 
-fn bench_sp_mc_all(c: &mut Criterion) {
+fn bench_seg_sp_mc(c: &mut Criterion) {
     c.bench_function_over_inputs("seg_queue_sp_mc", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_sp_mc(*num_threads)), 
-                                 vec![2, 4, 8, 16, 32, 64]);
+                                 (2..42).filter(|num| num % 2 == 0).collect::<Vec<usize>>());
 }
 
-criterion_group!(benches, bench_equal_all, bench_mp_sc_all_lock, bench_mp_sc_all,
-                          bench_sp_mc_all_lock, bench_sp_mc_all);
+criterion_group!(benches, bench_seg_equal_lock, bench_seg_equal, bench_seg_mp_sc_lock,
+                          bench_seg_mp_sc, bench_seg_sp_mc_lock, bench_seg_sp_mc);
 criterion_main!(benches);
