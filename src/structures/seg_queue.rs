@@ -19,8 +19,8 @@ unsafe impl<T: Send> Sync for SegQueue<T> {}
 
 impl<T: Send> SegQueue<T> {
     pub fn new(k: usize) -> Self {
-        if k > 0 || k & (k - 1) == 0 {
-            panic!("k must be a non-zero power of 2!");
+        if (k & !(k - 1)) != k {
+            panic!("k must be a non-zero power of 2!")
         }
         let init_node = Box::into_raw(Box::new(Segment::new(k)));
         SegQueue {

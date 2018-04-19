@@ -43,7 +43,7 @@ fn bench_equal_lock(num_threads: usize) {
 }
 
 fn bench_equal(num_threads: usize) {
-    let queue = Arc::new(SegQueue::new(64));
+    let queue = Arc::new(SegQueue::new(32));
     let mut wait_vec: Vec<JoinHandle<()>> = Vec::new();
 
     for _ in 0..num_threads / 2 {
@@ -108,7 +108,7 @@ fn bench_mp_sc_lock(num_threads: usize) {
 }
 
 fn bench_mp_sc(num_threads: usize) {
-    let queue = Arc::new(SegQueue::new(64));
+    let queue = Arc::new(SegQueue::new(32));
     let mut wait_vec = Vec::new();
 
     let amount = 10000 / num_threads;
@@ -174,7 +174,7 @@ fn bench_sp_mc_lock(num_threads: usize) {
 }
 
 fn bench_sp_mc(num_threads: usize) {
-    let queue = Arc::new(SegQueue::new(64));
+    let queue = Arc::new(SegQueue::new(32));
     let mut wait_vec = Vec::new();
 
     let amount = 10000 / num_threads;
