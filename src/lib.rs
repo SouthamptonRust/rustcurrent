@@ -8,9 +8,11 @@
 extern crate time;
 extern crate rand;
 extern crate thread_local;
+extern crate rayon;
 
 pub mod structures;
 pub mod memory;
+mod testing;
 
 mod tests {
    
