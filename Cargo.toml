@@ -26,3 +26,7 @@ harness=false
 [[bench]]
 name="bench_queue"
 harness=false
+
+[[bench]]
+name="bench_set"
+harness=false
