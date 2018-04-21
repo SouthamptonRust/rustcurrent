@@ -19,10 +19,67 @@ impl<Seq: Hash + Eq + Clone, Ret: Eq + Copy> Configuration<Seq, Ret> {
 
     pub fn from_invoke(&self, invoke: &InvokeEvent<Seq, Ret>) -> Self {
         let mut new_states = self.states.clone();
-        new_states.states[invoke.id] = ThreadState::Called(invoke.message.clone(), invoke.op, invoke.res);
+        new_states.states[invoke.id] = ThreadState::Called(invoke.message.clone(), invoke.op, invoke.res, invoke.arg);
         Self {
             sequential: self.sequential.clone(),
             states: new_states
+        }
+    }
+
+    pub fn has_called(&self, thread_id: usize) -> bool {
+        match &self.states.states[thread_id] {
+            &ThreadState::Called(_, _, _, _) => true,
+            _ => false
+        }
+    }
+
+    pub fn can_return(&self, thread_id: usize) -> bool {
+        match &self.states.states[thread_id] {
+            &ThreadState::Linearized(_) => true,
+            _ => false
+        }
+    }
+
+    pub fn try_return(&self, thread_id: usize) -> Result<Configuration<Seq, Ret>, Option<Ret>> {
+        match &self.states.states[thread_id] {
+            &ThreadState::Linearized(_) => {
+                let new_states = self.states.make_return(thread_id);
+                Ok(Self {
+                    sequential: self.sequential.clone(),
+                    states: new_states
+                })
+            },
+            &ThreadState::Called(ref msg, op, res, arg) => {
+                let (new_seq, new_res) = op(&self.sequential, arg);
+                if new_res == res {
+                    let new_states = self.states.make_fire_return(thread_id);
+                    Ok(Self {
+                        sequential: new_seq,
+                        states: new_states
+                    })
+                } else {
+                    Err(new_res)
+                }
+            },
+            &ThreadState::Returned => panic!("Operation should not be returned!")
+        }
+    }
+
+    pub fn try_linearize(&self, thread_id: usize) -> Result<Configuration<Seq, Ret>, Option<Ret>> {
+        match &self.states.states[thread_id] {
+            &ThreadState::Called(ref msg, op, res, arg) => {
+                let (new_seq, new_res) = op(&self.sequential, arg);
+                if new_res == res {
+                    let new_states = self.states.make_linearize(thread_id, new_res);
+                    Ok(Self {
+                        sequential: new_seq,
+                        states: new_states
+                    })
+                } else {
+                    Err(new_res)
+                }
+            },
+            _ => panic!("Operation should be in called mode!")
         }
     }
 }
@@ -57,6 +114,37 @@ impl<Seq: Eq, Ret: Eq + Copy> StatesWrapper<Seq, Ret> {
             states
         }
     }
+
+    pub fn can_return(&self, thread_id: usize) -> bool {
+        match &self.states[thread_id] {
+            &ThreadState::Linearized(_) => true,
+            _ => false
+        }
+    }
+
+    pub fn make_return(&self, thread_id: usize) -> Self {
+        let mut new_states = self.states.clone();
+        new_states[thread_id] = ThreadState::Returned;
+        return Self {
+            states: new_states
+        }
+    }
+
+    pub fn make_fire_return(&self, thread_id: usize) -> Self {
+        let mut new_states = self.states.clone();
+        new_states[thread_id] = ThreadState::Returned;
+        return Self {
+            states: new_states
+        }
+    }
+
+    pub fn make_linearize(&self, thread_id: usize, result: Option<Ret>) -> Self {
+        let mut new_states = self.states.clone();
+        new_states[thread_id] = ThreadState::Linearized(result);
+        return Self {
+            states: new_states
+        }
+    }
 }
 
 impl<Seq: Eq, Ret: Eq + Copy> Clone for StatesWrapper<Seq, Ret> {
@@ -72,7 +160,7 @@ impl<Seq: Eq, Ret: Eq + Copy> Clone for StatesWrapper<Seq, Ret> {
 }
 
 pub enum ThreadState<Seq, Ret: Copy> {
-    Called(String, fn(&Seq, Option<Ret>) -> (Seq, Option<Ret>), Option<Ret>),
+    Called(String, fn(&Seq, Option<Ret>) -> (Seq, Option<Ret>), Option<Ret>, Option<Ret>),
     Linearized(Option<Ret>),
     Returned
 }
@@ -84,8 +172,8 @@ impl<Seq: Eq, Ret: Eq + Copy> PartialEq for ThreadState<Seq, Ret> {
         use self::ThreadState::*;
 
         match (self, other) {
-            (&Called(ref msg, _, ref res), &Called(ref msg2, _, ref res2)) => {
-                msg == msg2 && res == res2
+            (&Called(ref msg, _, ref res, arg), &Called(ref msg2, _, ref res2, arg2)) => {
+                msg == msg2 && res == res2 && arg == arg2
             },
             (&Linearized(ref res), &Linearized(ref res2)) => res == res2,
             (&Returned, &Returned) => true,
@@ -99,8 +187,8 @@ impl<Seq: Eq, Ret: Eq + Copy> Clone for ThreadState<Seq, Ret> {
         use self::ThreadState::*;
 
         match self {
-            &Called(ref msg, ref func, ref res) => {
-                Called(msg.clone(), *func, *res)
+            &Called(ref msg, ref func, ref res, arg) => {
+                Called(msg.clone(), *func, *res, arg)
             },
             &Linearized(res) => {
                 Linearized(res)
@@ -117,7 +205,7 @@ impl<Seq: Eq + Hash, Ret: Eq + Hash + Copy> Hash for ThreadState<Seq, Ret> {
         use self::ThreadState::*;
 
         match self {
-            &Called(ref msg, _, ref res) => {"Called".to_owned().hash(h); msg.hash(h); res.hash(h)},
+            &Called(ref msg, _, ref res, arg) => {"Called".to_owned().hash(h); msg.hash(h); res.hash(h); arg.hash(h)},
             &Linearized(ref res) => { "Linearized".to_owned().hash(h); res.hash(h) },
             &Returned => { "Returned".to_owned().hash(h) }
         }

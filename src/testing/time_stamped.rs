@@ -8,7 +8,7 @@ pub struct TimeStamped<Seq, Ret> {
 
 impl<Seq, Ret> TimeStamped<Seq, Ret> {
     pub fn new_invoke(id: usize, message: String, 
-                      seq_method: fn(&Seq, Option<Ret>) -> (Seq, Option<Ret>)) -> Self
+                      seq_method: fn(&Seq, Option<Ret>) -> (Seq, Option<Ret>), arg: Option<Ret>) -> Self
     {
         Self {
             stamp: Instant::now(),
@@ -16,6 +16,7 @@ impl<Seq, Ret> TimeStamped<Seq, Ret> {
                 id,
                 message,
                 op: seq_method,
+                arg,
                 res: None
             })
         }
@@ -61,6 +62,7 @@ pub struct InvokeEvent<Seq, Ret> {
     pub id: usize,
     pub message: String,
     pub op: fn(&Seq, Option<Ret>) -> (Seq, Option<Ret>),
+    pub arg: Option<Ret>,
     pub res: Option<Ret>
 }
 

@@ -532,15 +532,19 @@ mod tests {
         assert_eq!(None, stack.pop());
     }
 
+    #[test]
     fn linearize() {
         let stack: Stack<usize> = Stack::new(true);
         let sequential: Vector<usize> = Vector::new();
         let mut linearizer: LinearizabilityTester<Stack<usize>, Vector<usize>, usize> 
-                = LinearizabilityTester::new(8, 1000, stack, sequential);
+                = LinearizabilityTester::new(8, 100000, stack, sequential);
 
         fn sequential_pop(stack: &Vector<usize>, val: Option<usize>) -> (Vector<usize>, Option<usize>) {
             match stack.pop_back() {
-                Some((arc, vec)) => (vec, Some(Arc::try_unwrap(arc).expect("Arc not in use"))),
+                Some((arc, vec)) => {
+                    let res = *arc;
+                    (vec, Some(res))
+                },
                 None => (Vector::new(), None)
             }
         }
@@ -563,6 +567,8 @@ mod tests {
             }
         }
 
-        linearizer.run(worker);
+        let result = linearizer.run(worker);
+
+        println!("{:?}", result);
     }
 }

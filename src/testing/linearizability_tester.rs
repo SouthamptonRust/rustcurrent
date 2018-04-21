@@ -54,22 +54,37 @@ impl<C: Sync + Send, S: Clone + Hash + Eq, Ret: Send + Eq + Hash + Copy> Lineari
         // We have the logs, so we can merge them and start the solver
         let sorted_log = ThreadLog::merge(full_logs);
         
-        for event in sorted_log {
-            match event.event {
-                Event::Invoke(invoke) => println!("{:?} -- Invoke -- {}", event.stamp, invoke.id),
-                Event::Return(ret) => println!("{:?} -- Return -- {}", event.stamp, ret.id)
+        /* for event in &sorted_log {
+            match &event.event {
+                &Event::Invoke(ref invoke) => println!("{:?} -- Invoke -- {}", event.stamp, invoke.id),
+                &Event::Return(ref ret) => println!("{:?} -- Return -- {}", event.stamp, ret.id)
             }
-        }
+        } */
 
-        LinearizabilityResult::Success
+        self.solve(sorted_log)
     }
 
-    fn solve(&mut self, log: ThreadLog<C, S, Ret>) -> LinearizabilityResult {
+    fn next_lin_attempt(&self, config: &Configuration<S, Ret>, id: usize, start: usize, event_id: usize) -> Option<Node<S, Ret>> {
+        let next_thread_id = if id == start {
+            0
+        } else if start + 1 != id {
+            start + 1
+        } else {
+            start + 2
+        };
+        if next_thread_id > self.num_threads {
+            Some(Node::LinAttempt(config.clone(), id, next_thread_id, event_id))
+        } else {
+            None
+        }
+    }
+
+    fn solve(&mut self, log: Vec<TimeStamped<S, Ret>>) -> LinearizabilityResult {
         let initial_config: Configuration<S, Ret> = Configuration::new(self.sequential.clone(), self.num_threads);
         let mut current = Some(Node::HistoryEvent(initial_config, 0));
         let mut stack: Vec<Option<Node<S, Ret>>> = Vec::new();
         let mut seen: HashSet<Option<Node<S, Ret>>> = HashSet::new();
-        let num_events = log.events.len();
+        let num_events = log.len();
 
         seen.insert(current.clone());
         let mut iterations = 0;
@@ -90,7 +105,7 @@ impl<C: Sync + Send, S: Clone + Hash + Eq, Ret: Send + Eq + Hash + Copy> Lineari
                         return LinearizabilityResult::Success
                     }
 
-                    match &log.events[event_id].event {
+                    match &log[event_id].event {
                         &Event::Invoke(ref invoke) => {
                             let new_config = config.from_invoke(invoke);
                             current = Some(Node::HistoryEvent(new_config, event_id + 1));
@@ -103,15 +118,41 @@ impl<C: Sync + Send, S: Clone + Hash + Eq, Ret: Send + Eq + Hash + Copy> Lineari
                         }
                     }
                 },
-                Node::LinAttempt(config, id, start, mid) => {
-                    
+                Node::LinAttempt(config, id, start, event_id) => {
+                    let next = self.next_lin_attempt(&config, id, start, event_id);
+                    if config.has_called(start) || start == id {
+                        // Attempt to linearize the op at start
+                        let fire_result = if id == start { config.try_return(id) } else { config.try_linearize(start) };
+                        match fire_result {
+                            Ok(new_config) => {
+                                if next.is_some() {
+                                    stack.push(next);
+                                }
+                                if id == start {
+                                    current = Some(Node::HistoryEvent(new_config.clone(), event_id + 1));
+                                    if !seen.insert(current.clone()) {
+                                        current = None;
+                                    }
+                                } else {
+                                    current = Some(Node::LinAttempt(new_config.clone(), id, id, event_id));
+                                }
+                            },
+                            Err(new_result) => {
+                                current = if config.can_return(id) && id == start { None } else { next };
+                            }
+                        }
+                    } else {
+                        current = next;
+                    }
                 }
             }
-
-            current = None;
+            iterations += 1;
+            if iterations == self.iterations {
+                return LinearizabilityResult::TimedOut
+            }
         }
 
-        LinearizabilityResult::Success
+        LinearizabilityResult::Failure
     }
 }
 
@@ -181,10 +222,10 @@ impl<C: Sync, Seq, Ret: Send + Copy> ThreadLog<C, Seq, Ret> {
     {
         let events_num = self.events.len();
 
-        self.events.push(TimeStamped::new_invoke(id, message, seq_method));
+        self.events.push(TimeStamped::new_invoke(id, message, seq_method, None));
         let result = conc_method(&*self.concurrent);
         self.events.push(TimeStamped::new_return(id, result));
-        match self.events[events_num - 2].event {
+        match self.events[events_num].event {
             Event::Invoke(ref mut invoke) => {
                 invoke.res = result;
             },
@@ -195,7 +236,7 @@ impl<C: Sync, Seq, Ret: Send + Copy> ThreadLog<C, Seq, Ret> {
     pub fn log_val<F>(&mut self, id: usize, conc_method: F, conc_val: Ret, message: String, seq_method: fn(&Seq, Option<Ret>) -> (Seq, Option<Ret>))
     where F: Fn(&C, Ret) -> ()
     {
-        self.events.push(TimeStamped::new_invoke(id, message, seq_method));
+        self.events.push(TimeStamped::new_invoke(id, message, seq_method, Some(conc_val)));
         conc_method(&*self.concurrent, conc_val);
         self.events.push(TimeStamped::new_return(id, None));
     }
@@ -211,6 +252,7 @@ impl<C: Sync, Seq, Ret: Send + Copy> ThreadLog<C, Seq, Ret> {
     }
 }
 
+#[derive(Debug)]
 pub enum LinearizabilityResult {
     Success,
     Failure,
