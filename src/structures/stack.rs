@@ -532,7 +532,6 @@ mod tests {
         assert_eq!(None, stack.pop());
     }
 
-    #[test]
     fn linearize() {
         let stack: Stack<usize> = Stack::new(true);
         let sequential: Vector<usize> = Vector::new();

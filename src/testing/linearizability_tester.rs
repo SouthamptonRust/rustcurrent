@@ -92,15 +92,19 @@ impl<C: Sync + Send, S: Clone + Hash + Eq, Ret: Send + Eq + Hash + Copy> Lineari
 
                     match &log.events[event_id].event {
                         &Event::Invoke(ref invoke) => {
-
+                            let new_config = config.from_invoke(invoke);
+                            current = Some(Node::HistoryEvent(new_config, event_id + 1));
+                            if !seen.insert(current.clone()) {
+                                current = None
+                            }
                         },
                         &Event::Return(ref ret) => {
-
+                            current = Some(Node::LinAttempt(config.clone(), ret.id, ret.id, event_id));
                         }
                     }
                 },
                 Node::LinAttempt(config, id, start, mid) => {
-
+                    
                 }
             }
 
