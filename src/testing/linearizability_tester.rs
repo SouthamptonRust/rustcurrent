@@ -1,8 +1,7 @@
 extern crate rayon;
-use rayon::Scope;
 
 use std::marker::PhantomData;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
 use std::cell::UnsafeCell;
 
 use super::time_stamped::{TimeStamped, Event, InvokeEvent, ReturnEvent};
@@ -118,7 +117,7 @@ impl<C: Sync, Seq, Ret: Send> ThreadLog<C, Seq, Ret> {
     where F: Fn(&C, Ret) -> ()
     {
         self.events.push(TimeStamped::new_invoke(id, message, seq_method));
-        let result = conc_method(&*self.concurrent, conc_val);
+        conc_method(&*self.concurrent, conc_val);
         self.events.push(TimeStamped::new_return(id, None));
     }
 
