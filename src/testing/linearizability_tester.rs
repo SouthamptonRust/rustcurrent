@@ -3,10 +3,13 @@ extern crate rayon;
 use std::marker::PhantomData;
 use std::sync::{Arc};
 use std::cell::UnsafeCell;
+use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 
 use super::time_stamped::{TimeStamped, Event, InvokeEvent, ReturnEvent};
+use super::automaton::{Configuration, ThreadState};
 
-pub struct LinearizabilityTester<C: Sync, S, Ret: Send>
+pub struct LinearizabilityTester<C: Sync, S: Clone, Ret: Send + Eq + Hash>
 {
     num_threads: usize,
     iterations: usize,
@@ -15,7 +18,7 @@ pub struct LinearizabilityTester<C: Sync, S, Ret: Send>
     _marker: PhantomData<Ret>
 }
 
-impl<C: Sync + Send, S, Ret: Send> LinearizabilityTester<C, S, Ret> 
+impl<C: Sync + Send, S: Clone + Hash + Eq, Ret: Send + Eq + Hash> LinearizabilityTester<C, S, Ret> 
 {
     pub fn new(num_threads: usize, iterations: usize, concurrent: C, sequential: S) -> Self {
         Self {
@@ -27,7 +30,7 @@ impl<C: Sync + Send, S, Ret: Send> LinearizabilityTester<C, S, Ret>
         }   
     }
 
-    pub fn run(&mut self, worker: fn(usize, &mut ThreadLog<C, S, Ret>) -> ()) -> bool {
+    pub fn run(&mut self, worker: fn(usize, &mut ThreadLog<C, S, Ret>) -> ()) -> LinearizabilityResult {
         let num_threads = self.num_threads;
         let arc = self.concurrent.clone();
         let logs = Arc::new(LogsWrapper::new(num_threads, arc));
@@ -53,12 +56,39 @@ impl<C: Sync + Send, S, Ret: Send> LinearizabilityTester<C, S, Ret>
         
         for event in sorted_log {
             match event.event {
-                Event::Invoke(invoke) => println!("Invoke -- {}", invoke.id),
-                Event::Return(ret) => println!("Return -- {}", ret.id)
+                Event::Invoke(invoke) => println!("{:?} -- Invoke -- {}", event.stamp, invoke.id),
+                Event::Return(ret) => println!("{:?} -- Return -- {}", event.stamp, ret.id)
             }
         }
 
-        true
+        LinearizabilityResult::Success
+    }
+
+    fn solve(&mut self) -> LinearizabilityResult {
+        let initial_config: Configuration<S, Ret> = Configuration::new(self.sequential.clone(), self.num_threads);
+        let mut current = Node::HistoryEvent(initial_config, 0);
+        let mut stack: Vec<Node<S, Ret>> = Vec::new();
+        let mut seen: HashSet<Node<S, Ret>> = HashSet::new();
+
+
+        LinearizabilityResult::Success
+    }
+}
+
+#[derive(Eq)]
+#[derive(PartialEq)]
+enum Node<Seq: Hash + Eq, Ret: Eq + Hash> {
+    HistoryEvent(Configuration<Seq, Ret>, usize),
+    LinAttempt(Configuration<Seq, Ret>, usize, usize, usize)
+}
+
+impl<Seq: Hash + Eq, Ret: Eq + Hash> Hash for Node<Seq, Ret> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        use self::Node::*;
+        match self {
+            &HistoryEvent(config, id) => { config.hash(state); id.hash(state); },
+            &LinAttempt(config, id, mid, start) => { config.hash(state); id.hash(state); mid.hash(state); start.hash(state);}
+        }
     }
 }
 
@@ -130,4 +160,9 @@ impl<C: Sync, Seq, Ret: Send> ThreadLog<C, Seq, Ret> {
 
         return result_vec
     }
+}
+
+pub enum LinearizabilityResult {
+    Success,
+    Failure
 }

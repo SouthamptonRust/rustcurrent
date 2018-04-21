@@ -2,7 +2,7 @@ use std::time::Instant;
 use std::cmp::Ordering;
 
 pub struct TimeStamped<Seq, Ret> {
-    stamp: Instant,
+    pub stamp: Instant,
     pub event: Event<Seq, Ret>
 }
 
