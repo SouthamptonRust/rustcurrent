@@ -423,11 +423,13 @@ mod tests {
     #![allow(unused_imports)]
     use super::Stack;
     use super::get_id;
+    use super::super::super::testing::linearizability_tester::{LinearizabilityTester, ThreadLog};
     use std::sync::atomic::Ordering;
     use std::{thread, thread::ThreadId};
     use std::sync::Arc;
     use std::cell::RefCell;
     use std::mem;
+    use std::collections;
 
     #[derive(Debug)]
     #[derive(PartialEq)]
@@ -521,5 +523,22 @@ mod tests {
         }
         println!("Joined all");
         assert_eq!(None, stack.pop());
+    }
+
+    fn linearize() {
+        let stack: Stack<usize> = Stack::new(true);
+        let sequential: Vec<usize> = Vec::new();
+        let linearizer: LinearizabilityTester<Stack<usize>, Vec<usize>, Option<usize>> 
+                = LinearizabilityTester::new(8, 2000, stack, sequential);
+
+        fn sequential_pop(stack: &Vec<usize>) -> (Vec<usize>, Option<usize>) {
+            (Vec::new(), Some(10))
+        }
+
+        fn worker(id: usize, log: &mut ThreadLog<Stack<usize>, Vec<usize>, Option<usize>>) {
+            log.log(id, Stack::pop, "hello".to_owned(), sequential_pop)
+        }
+
+        linearizer.run(worker);
     }
 }
