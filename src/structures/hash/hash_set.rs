@@ -770,6 +770,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn stress_test() {
         let set_arc = Arc::new(HashSet::new());
         let mut wait_vec = Vec::new();

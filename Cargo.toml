@@ -11,6 +11,7 @@ time = "0.1"
 rand = "0.5.0-pre.0"
 thread_local = "0.3"
 rayon="1.0"
+im = "10.2.0"
 
 [[bench]]
 name="bench_stack"

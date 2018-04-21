@@ -421,9 +421,15 @@ impl<T: Send> ThreadInfo<T> {
 
 mod tests {
     #![allow(unused_imports)]
+    extern crate im;
+    use self::im::Vector;
+
+    use rand::{thread_rng, Rng};
+
     use super::Stack;
     use super::get_id;
     use super::super::super::testing::linearizability_tester::{LinearizabilityTester, ThreadLog};
+
     use std::sync::atomic::Ordering;
     use std::{thread, thread::ThreadId};
     use std::sync::Arc;
@@ -489,6 +495,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn stress_test_elimination() {
         let stack: Arc<Stack<u8>> = Arc::new(Stack::new(true));
         let mut waitvec: Vec<thread::JoinHandle<()>> = Vec::new();
@@ -525,18 +532,36 @@ mod tests {
         assert_eq!(None, stack.pop());
     }
 
+    #[test]
     fn linearize() {
         let stack: Stack<usize> = Stack::new(true);
-        let sequential: Vec<usize> = Vec::new();
-        let mut linearizer: LinearizabilityTester<Stack<usize>, Vec<usize>, Option<usize>> 
-                = LinearizabilityTester::new(8, 2000, stack, sequential);
+        let sequential: Vector<usize> = Vector::new();
+        let mut linearizer: LinearizabilityTester<Stack<usize>, Vector<usize>, usize> 
+                = LinearizabilityTester::new(8, 1000, stack, sequential);
 
-        fn sequential_pop(stack: &Vec<usize>) -> (Vec<usize>, Option<usize>) {
-            (Vec::new(), Some(10))
+        fn sequential_pop(stack: &Vector<usize>, val: Option<usize>) -> (Vector<usize>, Option<usize>) {
+            match stack.pop_back() {
+                Some((arc, vec)) => (vec, Some(Arc::try_unwrap(arc).expect("Arc not in use"))),
+                None => (Vector::new(), None)
+            }
         }
 
-        fn worker(id: usize, log: &mut ThreadLog<Stack<usize>, Vec<usize>, Option<usize>>) {
-            log.log(id, Stack::pop, "hello".to_owned(), sequential_pop)
+        fn sequential_push(stack: &Vector<usize>, val: Option<usize>) -> (Vector<usize>, Option<usize>) {
+            (stack.push_back(val.unwrap()), None)
+        }
+
+        fn worker(id: usize, log: &mut ThreadLog<Stack<usize>, Vector<usize>, usize>) {
+            for _ in 0..1000 {
+                let rand = thread_rng().gen_range(0, 101);
+                if rand < 30 {
+                    // push
+                    let val = thread_rng().gen_range(0, 122222);
+                    log.log_val(id, Stack::push, val, format!("push: {}", val), sequential_push);
+                } else {
+                    // pop
+                    log.log(id, Stack::pop, "pop".to_owned(), sequential_pop)
+                }
+            }
         }
 
         linearizer.run(worker);

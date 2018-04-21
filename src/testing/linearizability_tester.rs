@@ -3,6 +3,7 @@ use rayon::Scope;
 
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
+use std::cell::UnsafeCell;
 
 use super::time_stamped::{TimeStamped, Event, InvokeEvent, ReturnEvent};
 
@@ -30,25 +31,22 @@ impl<C: Sync + Send, S, Ret: Send> LinearizabilityTester<C, S, Ret>
     pub fn run(&mut self, worker: fn(usize, &mut ThreadLog<C, S, Ret>) -> ()) -> bool {
         let num_threads = self.num_threads;
         let arc = self.concurrent.clone();
-        let logs = Arc::new(Mutex::new(Vec::new()));
-        for i in 0..num_threads {
-            logs.lock().unwrap().push(ThreadLog::new(i, arc.clone()));
-        }
+        let logs = Arc::new(LogsWrapper::new(num_threads, arc));
 
         rayon::scope(|s| {
             for i in 0..num_threads {
                 let log_clone = logs.clone();
                 s.spawn(move |_| {
                     println!("Spawned {}", i);
-                    worker(i, &mut log_clone.lock().unwrap().split_at_mut(i).1[0]);
+                    worker(i, log_clone.get_log(i));
                     println!("Finished {}", i);
                 });
             }
         });
         
         let full_logs = match Arc::try_unwrap(logs) {
-            Ok(mutex) => mutex.into_inner().expect("Mutex should not be locked"),
-            Err(_) => panic!("arc isn't free after join")
+            Ok(logwrapper) => logwrapper.all_logs(),
+            Err(_) => panic!("Arc should be free") 
         };
 
         // We have the logs, so we can merge them and start the solver
@@ -65,6 +63,34 @@ impl<C: Sync + Send, S, Ret: Send> LinearizabilityTester<C, S, Ret>
     }
 }
 
+pub struct LogsWrapper<C: Sync, Seq, Ret: Send> {
+    logs: UnsafeCell<Vec<ThreadLog<C, Seq, Ret>>>
+}
+
+impl<C: Sync, Seq, Ret: Send> LogsWrapper<C, Seq, Ret> {
+    pub fn new(size: usize, conc: Arc<C>) -> Self {
+        let mut vec = Vec::new();
+        for i in 0..size {
+            vec.push(ThreadLog::new(i, conc.clone()));
+        }
+        Self {
+            logs: UnsafeCell::new(vec)
+        }
+    }
+
+    fn get_log(&self, index: usize) -> &mut ThreadLog<C, Seq, Ret> {
+        unsafe {
+            &mut (*self.logs.get()).split_at_mut(index).1[0]
+        }
+    }
+
+    fn all_logs(self) -> Vec<ThreadLog<C, Seq, Ret>> {
+        self.logs.into_inner()
+    }
+}
+
+unsafe impl<C: Sync, Seq, Ret: Send> Sync for LogsWrapper<C, Seq, Ret> {} 
+
 pub struct ThreadLog<C: Sync, Seq, Ret: Send> {
     id: usize,
     concurrent: Arc<C>,
@@ -80,12 +106,20 @@ impl<C: Sync, Seq, Ret: Send> ThreadLog<C, Seq, Ret> {
         }
     }
 
-    pub fn log<F>(&mut self, id: usize, conc_method: F, message: String, seq_method: fn(&Seq) -> (Seq, Ret))
-    where F: Fn(&C) -> Ret
+    pub fn log<F>(&mut self, id: usize, conc_method: F, message: String, seq_method: fn(&Seq, Option<Ret>) -> (Seq, Option<Ret>))
+    where F: Fn(&C) -> Option<Ret>
     {
         self.events.push(TimeStamped::new_invoke(id, message, seq_method));
         let result = conc_method(&*self.concurrent);
         self.events.push(TimeStamped::new_return(id, result));
+    }
+
+    pub fn log_val<F>(&mut self, id: usize, conc_method: F, conc_val: Ret, message: String, seq_method: fn(&Seq, Option<Ret>) -> (Seq, Option<Ret>))
+    where F: Fn(&C, Ret) -> ()
+    {
+        self.events.push(TimeStamped::new_invoke(id, message, seq_method));
+        let result = conc_method(&*self.concurrent, conc_val);
+        self.events.push(TimeStamped::new_return(id, None));
     }
 
     pub fn merge(logs: Vec<Self>) -> Vec<TimeStamped<Seq, Ret>> {

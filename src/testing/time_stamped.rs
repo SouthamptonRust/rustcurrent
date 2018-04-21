@@ -8,7 +8,7 @@ pub struct TimeStamped<Seq, Ret> {
 
 impl<Seq, Ret> TimeStamped<Seq, Ret> {
     pub fn new_invoke(id: usize, message: String, 
-                      seq_method: fn(&Seq) -> (Seq, Ret)) -> Self
+                      seq_method: fn(&Seq, Option<Ret>) -> (Seq, Option<Ret>)) -> Self
     {
         Self {
             stamp: Instant::now(),
@@ -20,7 +20,7 @@ impl<Seq, Ret> TimeStamped<Seq, Ret> {
         }
     }
 
-    pub fn new_return(id: usize, result: Ret) -> Self {
+    pub fn new_return(id: usize, result: Option<Ret>) -> Self {
         Self {
             stamp: Instant::now(),
             event: Event::Return(ReturnEvent {
@@ -59,10 +59,10 @@ pub enum Event<Seq, Ret> {
 pub struct InvokeEvent<Seq, Ret> {
     pub id: usize,
     pub message: String,
-    pub op: fn(&Seq) -> (Seq, Ret)
+    pub op: fn(&Seq, Option<Ret>) -> (Seq, Option<Ret>)
 }
 
 pub struct ReturnEvent<Ret> {
     pub id: usize,
-    pub result: Ret
+    pub result: Option<Ret>
 }

@@ -1097,6 +1097,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_multithreaded_insert() {
         let map: Arc<HashMap<u16, String>> = Arc::new(HashMap::new());
         let mut wait_vec: Vec<thread::JoinHandle<()>> = Vec::new();
@@ -1136,6 +1137,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_typical() {
         let map: Arc<HashMap<u32, u32>> = Arc::default();
         let mut wait_vec: Vec<JoinHandle<()>> = Vec::new();
