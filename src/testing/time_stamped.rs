@@ -15,7 +15,8 @@ impl<Seq, Ret> TimeStamped<Seq, Ret> {
             event: Event::Invoke(InvokeEvent {
                 id,
                 message,
-                op: seq_method
+                op: seq_method,
+                res: None
             })
         }
     }
@@ -59,7 +60,8 @@ pub enum Event<Seq, Ret> {
 pub struct InvokeEvent<Seq, Ret> {
     pub id: usize,
     pub message: String,
-    pub op: fn(&Seq, Option<Ret>) -> (Seq, Option<Ret>)
+    pub op: fn(&Seq, Option<Ret>) -> (Seq, Option<Ret>),
+    pub res: Option<Ret>
 }
 
 pub struct ReturnEvent<Ret> {
