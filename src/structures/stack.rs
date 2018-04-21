@@ -528,7 +528,7 @@ mod tests {
     fn linearize() {
         let stack: Stack<usize> = Stack::new(true);
         let sequential: Vec<usize> = Vec::new();
-        let linearizer: LinearizabilityTester<Stack<usize>, Vec<usize>, Option<usize>> 
+        let mut linearizer: LinearizabilityTester<Stack<usize>, Vec<usize>, Option<usize>> 
                 = LinearizabilityTester::new(8, 2000, stack, sequential);
 
         fn sequential_pop(stack: &Vec<usize>) -> (Vec<usize>, Option<usize>) {

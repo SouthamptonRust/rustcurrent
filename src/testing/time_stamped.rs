@@ -1,13 +1,14 @@
 use std::time::Instant;
+use std::cmp::Ordering;
 
-pub struct TimeStamped<'a, Seq: 'a, Ret: 'a> {
+pub struct TimeStamped<Seq, Ret> {
     stamp: Instant,
-    event: Event<'a, Seq, Ret>
+    pub event: Event<Seq, Ret>
 }
 
-impl<'a, Seq: 'a, Ret: 'a> TimeStamped<'a, Seq, Ret> {
-    pub fn new_invoke<F>(id: usize, message: String, seq_method: &'a F) -> Self
-    where F: Fn(&Seq) -> (Seq, Ret) + 'a
+impl<Seq, Ret> TimeStamped<Seq, Ret> {
+    pub fn new_invoke(id: usize, message: String, 
+                      seq_method: fn(&Seq) -> (Seq, Ret)) -> Self
     {
         Self {
             stamp: Instant::now(),
@@ -30,18 +31,38 @@ impl<'a, Seq: 'a, Ret: 'a> TimeStamped<'a, Seq, Ret> {
     }
 }
 
-pub enum Event<'a, Seq: 'a, Ret: 'a> {
-    Invoke(InvokeEvent<'a, Seq, Ret>),
+impl<Seq, Ret> Ord for TimeStamped<Seq, Ret> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.stamp.cmp(&other.stamp)
+    }
+}
+
+impl<Seq, Ret> PartialOrd for TimeStamped<Seq, Ret> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.stamp.partial_cmp(&other.stamp)
+    }
+}
+
+impl<Seq, Ret> PartialEq for TimeStamped<Seq, Ret> {
+    fn eq(&self, other: &Self) -> bool {
+        self.stamp == other.stamp
+    }
+}
+
+impl<Seq, Ret> Eq for TimeStamped<Seq, Ret> {}
+
+pub enum Event<Seq, Ret> {
+    Invoke(InvokeEvent<Seq, Ret>),
     Return(ReturnEvent<Ret>)
 }
 
-pub struct InvokeEvent<'a, Seq: 'a, Ret: 'a> {
-    id: usize,
-    message: String,
-    op: fn(&Seq) -> (Seq, Ret)
+pub struct InvokeEvent<Seq, Ret> {
+    pub id: usize,
+    pub message: String,
+    pub op: fn(&Seq) -> (Seq, Ret)
 }
 
 pub struct ReturnEvent<Ret> {
-    id: usize,
-    result: Ret
+    pub id: usize,
+    pub result: Ret
 }
