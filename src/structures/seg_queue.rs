@@ -333,6 +333,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_linearizabile_k_one() {
         let queue: SegQueue<usize> = SegQueue::new(1);
         let sequential: Vector<usize> = Vector::new();

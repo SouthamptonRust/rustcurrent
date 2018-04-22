@@ -612,12 +612,20 @@ impl<T: Send> ArrayNode<T> {
 
 mod tests {
     #![allow(unused_imports)]
+    extern crate im;
+    use self::im::Set;
+
+    use rand::{thread_rng, Rng};
+
     use super::HashSet;
     use std::sync::Arc;
     use std::thread;
     use std::thread::JoinHandle;
     use std::collections;
     use std::time::Duration;
+    use std::hash::Hash;
+    use std::fmt::Debug;
+    use super::super::super::super::testing::{LinearizabilityTester, LinearizabilityResult, ThreadLog};
 
     #[test]
     #[ignore]
@@ -802,5 +810,102 @@ mod tests {
                 panic!("Could not join thread!: {:?}", error)
             }
         }
+    }
+
+    #[derive(Hash)]
+    #[derive(Copy)]
+    #[derive(Clone)]
+    #[derive(Eq)]
+    #[derive(PartialEq)]
+    #[derive(Debug)]
+    enum SetResult<T: Copy + Clone + Eq + Hash + Debug + Send> {
+        Insert(Result<(), T>),
+        Contains(bool),
+        Remove(Option<T>)
+    }
+
+    #[test]
+    fn test_linearizable() {
+        let set: HashSet<usize> = HashSet::new();
+        let sequential: Set<usize> = Set::new();
+
+        let mut linearizer: LinearizabilityTester<HashSet<usize>, Set<usize>, SetResult<usize>> 
+                = LinearizabilityTester::new(8, 1000000, set, sequential); 
+
+        fn conc_insert(set: &HashSet<usize>, data: SetResult<usize>) -> Option<SetResult<usize>> {
+            if let SetResult::Remove(dat) = data {
+                Some(SetResult::Insert(set.insert(dat.unwrap())))
+            } else {
+                panic!("Invalid argument")
+            }
+        }
+
+        fn conc_contains(set: &HashSet<usize>, data: SetResult<usize>) -> Option<SetResult<usize>> {
+            if let SetResult::Remove(dat) = data {
+                Some(SetResult::Contains(set.contains(&dat.unwrap())))
+            } else {
+                panic!("Invalid argument")
+            }
+        }
+
+        fn conc_remove(set: &HashSet<usize>, data: SetResult<usize>) -> Option<SetResult<usize>> {
+            if let SetResult::Remove(dat) = data {
+                Some(SetResult::Remove(set.remove(&dat.unwrap())))
+            } else {
+                panic!("Invalid argument")
+            }
+        }
+
+        fn seq_insert(set: &Set<usize>, data: Option<SetResult<usize>>) -> (Set<usize>, Option<SetResult<usize>>) {
+            if let SetResult::Remove(dat) = data.unwrap() {
+                if set.contains(&dat.unwrap()) {
+                    (set.clone(), Some(SetResult::Insert(Err(dat.unwrap()))))
+                } else {
+                    (set.insert(dat.unwrap()), Some(SetResult::Insert(Ok(()))))
+                }
+            } else {
+                panic!("Invalid argument")
+            }
+        }
+
+        fn seq_contains(set: &Set<usize>, data: Option<SetResult<usize>>) -> (Set<usize>, Option<SetResult<usize>>) {
+            if let SetResult::Remove(dat) = data.unwrap() {
+                (set.clone(), Some(SetResult::Contains(set.contains(&dat.unwrap()))))
+            } else {
+                panic!("Invalid argument")
+            }
+        }
+
+        fn seq_remove(set: &Set<usize>, data: Option<SetResult<usize>>) -> (Set<usize>, Option<SetResult<usize>>) {
+            if let SetResult::Remove(dat) = data.unwrap() {
+                if !set.contains(&dat.unwrap()) {
+                    (set.clone(), Some(SetResult::Remove(None)))
+                } else {
+                    (set.remove(&dat.unwrap()), Some(SetResult::Remove(Some(dat.unwrap()))))
+                }
+            } else {
+                panic!("Invalid argument")
+            }
+        }
+
+        fn worker(id: usize, log: &mut ThreadLog<HashSet<usize>, Set<usize>, SetResult<usize>>) {
+            for _ in 0..500 {
+                let rand = thread_rng().gen_range(0, 101);
+                if rand < 30 {
+                    let val = thread_rng().gen_range(0, 101);
+                    log.log_val_result(id, conc_insert, SetResult::Remove(Some(val)), format!("insert: {}", val), seq_insert);
+                } else if rand < 60 {
+                    let val = thread_rng().gen_range(0, 101);
+                    log.log_val_result(id, conc_contains, SetResult::Remove(Some(val)), format!("contains: {}", val), seq_contains);
+                } else {
+                    let val = thread_rng().gen_range(0, 101);
+                    log.log_val_result(id, conc_remove, SetResult::Remove(Some(val)), format!("remove: {}", val), seq_remove);
+                }
+            }
+        }
+
+        let result = linearizer.run(worker);
+
+        println!("{:?}", result);
     }
 }

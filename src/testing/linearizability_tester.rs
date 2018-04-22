@@ -247,6 +247,25 @@ impl<C: Sync, Seq, Ret: Send + Copy> ThreadLog<C, Seq, Ret> {
         self.events.push(TimeStamped::new_return(id, None));
     }
 
+    pub fn log_val_result<F>(&mut self, id: usize, conc_method: F, conc_val: Ret, message: String, seq_method: fn(&Seq, Option<Ret>) -> (Seq, Option<Ret>))
+    where F: Fn(&C, Ret) -> Option<Ret>
+    {
+        let events_num = self.events.len();
+        self.events.push(TimeStamped::new_invoke(id, message, seq_method, Some(conc_val)));
+        let result = conc_method(&*self.concurrent, conc_val);
+        match result {
+            None => panic!("Shouldn't be none"),
+            Some(_) => {}
+        }
+        self.events.push(TimeStamped::new_return(id, result));
+        match self.events[events_num].event {
+            Event::Invoke(ref mut invoke) => {
+                invoke.res = result;
+            },
+            Event::Return(_) => panic!("Should be invoke event")
+        }
+    }
+
     pub fn merge(logs: Vec<Self>) -> Vec<TimeStamped<Seq, Ret>> {
         let mut result_vec = Vec::new();
         for mut log in logs {
