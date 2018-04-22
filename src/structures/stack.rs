@@ -533,6 +533,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn linearize() {
         let stack: Stack<usize> = Stack::new(true);
         let sequential: Vector<usize> = Vector::new();

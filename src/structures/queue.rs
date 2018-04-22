@@ -207,10 +207,17 @@ impl<T: Send> Default for Node<T> {
 
 mod tests {
     #![allow(unused_imports)]
+    extern crate im;
+    use self::im::Vector;
+
+    use rand::{thread_rng, Rng};
+
     use super::Queue;
     use std::sync::Arc;
     use std::thread;
     use std::sync::atomic::Ordering;
+
+    use super::super::super::testing::linearizability_tester::{LinearizabilityTester, ThreadLog};
 
     #[test]
     #[ignore]
@@ -272,5 +279,44 @@ mod tests {
         }
         println!("Joined all");
         assert_eq!(None, queue.dequeue());
+    }
+
+    #[test]
+    fn test_linearizable() {
+        let queue: Queue<usize> = Queue::new();
+        let sequential: Vector<usize> = Vector::new();
+
+        let mut linearizer: LinearizabilityTester<Queue<usize>, Vector<usize>, usize> 
+                = LinearizabilityTester::new(8, 1000000, queue, sequential);
+
+        fn sequential_dequeue(queue: &Vector<usize>, val: Option<usize>) -> (Vector<usize>, Option<usize>) {
+            match queue.pop_front() {
+                Some((arc, vec)) => {
+                    let res = *arc;
+                    (vec, Some(res))
+                },
+                None => (Vector::new(), None)
+            }
+        } 
+
+        fn sequential_enqueue(queue: &Vector<usize>, val: Option<usize>) -> (Vector<usize>, Option<usize>) {
+            (queue.push_back(val.unwrap()), None)
+        }
+
+        fn worker(id: usize, log: &mut ThreadLog<Queue<usize>, Vector<usize>, usize>) {
+            for _ in 0..1000 {
+                let rand = thread_rng().gen_range(0, 101);
+                if rand < 30 {
+                    let val = thread_rng().gen();
+                    log.log_val(id, Queue::enqueue, val, format!("enqueue: {}", val), sequential_enqueue);
+                } else {
+                    log.log(id, Queue::dequeue, "dequeue".to_owned(), sequential_dequeue);
+                }
+            }
+        }
+
+        let result = linearizer.run(worker);
+
+        println!("{:?}", result);
     }
 }
