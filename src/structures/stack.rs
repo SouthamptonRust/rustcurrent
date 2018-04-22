@@ -534,7 +534,7 @@ mod tests {
 
     #[test]
     #[ignore]
-    fn linearize() {
+    fn test_linearizable() {
         let stack: Stack<usize> = Stack::new(true);
         let sequential: Vector<usize> = Vector::new();
         let mut linearizer: LinearizabilityTester<Stack<usize>, Vector<usize>, usize> 

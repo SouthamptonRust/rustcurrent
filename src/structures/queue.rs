@@ -282,6 +282,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_linearizable() {
         let queue: Queue<usize> = Queue::new();
         let sequential: Vector<usize> = Vector::new();
