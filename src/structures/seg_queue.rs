@@ -273,7 +273,7 @@ mod tests {
     use std::sync::Arc;
     use std::thread;
     
-    use super::super::super::testing::{LinearizabilityTester, ThreadLog}; 
+    use super::super::super::testing::{LinearizabilityTester, LinearizabilityResult, ThreadLog}; 
 
     #[test]
     #[ignore]
@@ -333,7 +333,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_linearizabile_k_one() {
         let queue: SegQueue<usize> = SegQueue::new(1);
         let sequential: Vector<usize> = Vector::new();
@@ -370,5 +369,10 @@ mod tests {
         let result = linearizer.run(worker);
 
         println!("{:?}", result);
+
+        match result {
+            LinearizabilityResult::Success => assert!(true),
+            _ => assert!(false)
+        }
     }
 }

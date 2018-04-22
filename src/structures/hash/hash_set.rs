@@ -889,7 +889,7 @@ mod tests {
         }
 
         fn worker(id: usize, log: &mut ThreadLog<HashSet<usize>, Set<usize>, SetResult<usize>>) {
-            for _ in 0..500 {
+            for _ in 0..1000 {
                 let rand = thread_rng().gen_range(0, 101);
                 if rand < 30 {
                     let val = thread_rng().gen_range(0, 101);
@@ -907,5 +907,10 @@ mod tests {
         let result = linearizer.run(worker);
 
         println!("{:?}", result);
+
+        match result {
+            LinearizabilityResult::Success => assert!(true),
+            _ => assert!(false)
+        }
     }
 }

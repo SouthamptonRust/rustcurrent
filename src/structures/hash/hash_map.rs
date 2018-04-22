@@ -1032,10 +1032,18 @@ impl<K: Send, V: Send> ArrayNode<K, V> {
 
 mod tests {
     #![allow(unused_imports)]
+    extern crate im;
+    use self::im::Map;
+
+    use rand::{thread_rng, Rng};
+
     use super::HashMap;
     use std::sync::Arc;
     use std::thread;
     use std::thread::JoinHandle;
+    use std::hash::Hash;
+    use std::fmt::Debug;
+    use super::super::super::super::testing::{LinearizabilityTester, LinearizabilityResult, ThreadLog};
 
     #[test]
     #[ignore]
@@ -1195,6 +1203,164 @@ mod tests {
             if let Err(_) = handle.join() {
                 panic!("Could not join thread!")
             }
+        }
+    }
+
+    #[derive(Hash)]
+    #[derive(Copy)]
+    #[derive(Clone)]
+    #[derive(Eq)]
+    #[derive(PartialEq)]
+    #[derive(Debug)]
+    enum MapResult<K, V>
+    where K: Copy + Clone + Eq + Hash + Debug + Send,
+          V: Copy + Clone + Eq + Hash + Debug + Send
+    {
+        ArgWrap(K, V),
+        Insert(Result<(), (K, V)>),
+        Get(Option<V>),
+        Update(Result<(), V>),
+        Remove(Option<V>)
+    }
+
+    #[test]
+    fn test_linearizable() {
+        let map: HashMap<usize, usize> = HashMap::new();
+        let sequential: Map<usize, usize> = Map::new();
+
+        let mut linearizer: LinearizabilityTester<HashMap<usize, usize>, Map<usize, usize>, MapResult<usize, usize>>
+                = LinearizabilityTester::new(8, 100000, map, sequential);
+
+        fn conc_insert(map: &HashMap<usize, usize>, data: MapResult<usize, usize>)
+                -> Option<MapResult<usize, usize>>
+        {
+            if let MapResult::ArgWrap(key, val) = data {
+                Some(MapResult::Insert(map.insert(key, val)))
+            } else {
+                panic!("Invalid argument")
+            }
+        }
+
+        fn conc_get(map: &HashMap<usize, usize>, data: MapResult<usize, usize>)
+                -> Option<MapResult<usize, usize>>
+        {
+            if let MapResult::ArgWrap(key, val) = data {
+                match map.get(&key) {
+                    Some(guard) => Some(MapResult::Get(Some(guard.cloned()))),
+                    None => Some(MapResult::Get(None))
+                }
+            } else {
+                panic!("Invalid argument")
+            }
+        }
+
+        fn conc_update(map: &HashMap<usize, usize>, data: MapResult<usize, usize>)
+                -> Option<MapResult<usize, usize>>
+        {
+            if let MapResult::ArgWrap(key, val) = data {
+                Some(MapResult::Update(map.update(&key, &val, val)))
+            } else {
+                panic!("Invalid argument")
+            }
+        }
+
+        fn conc_remove(map: &HashMap<usize, usize>, data: MapResult<usize, usize>)
+                -> Option<MapResult<usize, usize>>
+        {
+            if let MapResult::ArgWrap(key, val) = data {
+                Some(MapResult::Remove(map.remove(&key, &val)))
+            } else {
+                panic!("Invalid argument")
+            }
+        }
+
+        fn seq_insert(map: &Map<usize, usize>, data: Option<MapResult<usize, usize>>)
+                -> (Map<usize, usize>, Option<MapResult<usize, usize>>)
+        {
+            if let MapResult::ArgWrap(key, val) = data.unwrap() {
+                if map.contains_key(&key) {
+                    (map.clone(), Some(MapResult::Insert(Err((key, val)))))
+                } else {
+                    (map.insert(key, val), Some(MapResult::Insert(Ok(()))))
+                }
+            } else {
+                panic!("Invalid argument")
+            }
+        }
+
+        fn seq_get(map: &Map<usize, usize>, data: Option<MapResult<usize, usize>>)
+                -> (Map<usize, usize>, Option<MapResult<usize, usize>>)
+        {
+            if let MapResult::ArgWrap(key, val) = data.unwrap() {
+                match map.get(&key) {
+                    Some(arc) => (map.clone(), Some(MapResult::Get(Some(*arc)))),
+                    None => (map.clone(), Some(MapResult::Get(None)))
+                }
+            } else {
+                panic!("Invalid argument")
+            }
+        }
+
+        fn seq_update(map: &Map<usize, usize>, data: Option<MapResult<usize, usize>>)
+                -> (Map<usize, usize>, Option<MapResult<usize, usize>>)
+        {
+            if let MapResult::ArgWrap(key, val) = data.unwrap() {
+                if let Some(value) = map.get(&key) {
+                    if *value == val {
+                        (map.insert(key, val), Some(MapResult::Update(Ok(()))))
+                    } else {
+                        (map.clone(), Some(MapResult::Update(Err(val))))
+                    }
+                } else {
+                    (map.clone(), Some(MapResult::Update(Err(val))))
+                }
+            } else {
+                panic!("Invalid argument")
+            }
+        }
+
+        fn seq_remove(map: &Map<usize, usize>, data: Option<MapResult<usize, usize>>)
+                -> (Map<usize, usize>, Option<MapResult<usize, usize>>)
+        {
+            if let MapResult::ArgWrap(key, val) = data.unwrap() {
+                if let Some(value) = map.get(&key) {
+                    if *value == val {
+                        (map.remove(&key), Some(MapResult::Remove(Some(val))))
+                    } else {
+                        (map.clone(), Some(MapResult::Remove(None)))
+                    }
+                } else {
+                    (map.clone(), Some(MapResult::Remove(None)))
+                }
+            } else {
+                panic!("Invalid argument")
+            }
+        }
+
+        fn worker(id: usize, log: &mut ThreadLog<HashMap<usize, usize>, Map<usize, usize>, MapResult<usize, usize>>) {
+            for _ in 0..1000 {
+                let rand = thread_rng().gen_range(0, 101);
+                let key = thread_rng().gen_range(0, 101);
+                let val = thread_rng().gen_range(0, 101);
+                if rand < 25 {
+                    log.log_val_result(id, conc_insert, MapResult::ArgWrap(key, val), format!("insert: {} -- {}", key, val), seq_insert);
+                } else if rand < 50 {
+                    log.log_val_result(id, conc_update, MapResult::ArgWrap(key, val), format!("update: {} -- {}", key, val), seq_update);
+                } else if rand < 75 {
+                    log.log_val_result(id, conc_get, MapResult::ArgWrap(key, val), format!("get: {} -- {}", key, val), seq_get);
+                } else {
+                    log.log_val_result(id, conc_remove, MapResult::ArgWrap(key, val), format!("remove: {} -- {}", key, val), seq_remove);
+                }
+            }
+        }
+
+        let result = linearizer.run(worker);
+
+        println!("{:?}", result);
+
+        match result {
+            LinearizabilityResult::Success => assert!(true),
+            _ => assert!(false)
         }
     }
 }

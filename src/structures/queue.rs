@@ -217,7 +217,7 @@ mod tests {
     use std::thread;
     use std::sync::atomic::Ordering;
 
-    use super::super::super::testing::linearizability_tester::{LinearizabilityTester, ThreadLog};
+    use super::super::super::testing::linearizability_tester::{LinearizabilityTester, LinearizabilityResult, ThreadLog};
 
     #[test]
     #[ignore]
@@ -282,7 +282,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_linearizable() {
         let queue: Queue<usize> = Queue::new();
         let sequential: Vector<usize> = Vector::new();
@@ -319,5 +318,10 @@ mod tests {
         let result = linearizer.run(worker);
 
         println!("{:?}", result);
+
+        match result {
+            LinearizabilityResult::Success => assert!(true),
+            _ => assert!(false)
+        }
     }
 }

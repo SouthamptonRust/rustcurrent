@@ -428,7 +428,7 @@ mod tests {
 
     use super::Stack;
     use super::get_id;
-    use super::super::super::testing::linearizability_tester::{LinearizabilityTester, ThreadLog};
+    use super::super::super::testing::linearizability_tester::{LinearizabilityTester, LinearizabilityResult, ThreadLog};
 
     use std::sync::atomic::Ordering;
     use std::{thread, thread::ThreadId};
@@ -533,7 +533,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_linearizable() {
         let stack: Stack<usize> = Stack::new(true);
         let sequential: Vector<usize> = Vector::new();
@@ -571,5 +570,10 @@ mod tests {
         let result = linearizer.run(worker);
 
         println!("{:?}", result);
+
+        match result {
+            LinearizabilityResult::Success => assert!(true),
+            _ => assert!(false)
+        }
     }
 }
