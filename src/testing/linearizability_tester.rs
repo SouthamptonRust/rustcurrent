@@ -5,6 +5,7 @@ use std::sync::{Arc};
 use std::cell::UnsafeCell;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
+use std::fmt::Debug;
 
 use super::time_stamped::{TimeStamped, Event, InvokeEvent, ReturnEvent};
 use super::automaton::{Configuration, ThreadState};
@@ -18,7 +19,7 @@ pub struct LinearizabilityTester<C: Sync, S: Clone, Ret: Send + Eq + Hash + Copy
     _marker: PhantomData<Ret>
 }
 
-impl<C: Sync + Send, S: Clone + Hash + Eq, Ret: Send + Eq + Hash + Copy> LinearizabilityTester<C, S, Ret> 
+impl<C: Sync + Send, S: Clone + Hash + Eq + Debug, Ret: Send + Eq + Hash + Copy + Debug> LinearizabilityTester<C, S, Ret> 
 {
     pub fn new(num_threads: usize, iterations: usize, concurrent: C, sequential: S) -> Self {
         Self {
@@ -65,14 +66,14 @@ impl<C: Sync + Send, S: Clone + Hash + Eq, Ret: Send + Eq + Hash + Copy> Lineari
     }
 
     fn next_lin_attempt(&self, config: &Configuration<S, Ret>, id: usize, start: usize, event_id: usize) -> Option<Node<S, Ret>> {
-        let next_thread_id = if id == start {
+        let next_thread_id = if id == start && start != 0 {
             0
         } else if start + 1 != id {
             start + 1
         } else {
             start + 2
         };
-        if next_thread_id > self.num_threads {
+        if next_thread_id < self.num_threads {
             Some(Node::LinAttempt(config.clone(), id, next_thread_id, event_id))
         } else {
             None
@@ -93,14 +94,15 @@ impl<C: Sync + Send, S: Clone + Hash + Eq, Ret: Send + Eq + Hash + Copy> Lineari
             iterations += 1;
             if iterations == self.iterations {
                 return LinearizabilityResult::TimedOut
-            }  
-
+            } 
+            println!("stack size: {}, seen size: {}", stack.len(), seen.len());
             if current.is_none() {
                 current = stack.pop().unwrap();
             }
 
             match current.unwrap() {
                 Node::HistoryEvent(config, event_id) => {
+                    println!("history event: {:?}, -- {}", config, event_id);
                     if event_id == num_events {
                         return LinearizabilityResult::Success
                     }
@@ -110,6 +112,7 @@ impl<C: Sync + Send, S: Clone + Hash + Eq, Ret: Send + Eq + Hash + Copy> Lineari
                             let new_config = config.from_invoke(invoke);
                             current = Some(Node::HistoryEvent(new_config, event_id + 1));
                             if !seen.insert(current.clone()) {
+                                println!("Already seen");
                                 current = None
                             }
                         },
@@ -119,6 +122,7 @@ impl<C: Sync + Send, S: Clone + Hash + Eq, Ret: Send + Eq + Hash + Copy> Lineari
                     }
                 },
                 Node::LinAttempt(config, id, start, event_id) => {
+                    println!("Trying to linearize {:?} for {:?}, start {:?}, event {:?}", config, id, start, event_id);
                     let next = self.next_lin_attempt(&config, id, start, event_id);
                     if config.has_called(start) || start == id {
                         // Attempt to linearize the op at start
@@ -131,6 +135,7 @@ impl<C: Sync + Send, S: Clone + Hash + Eq, Ret: Send + Eq + Hash + Copy> Lineari
                                 if id == start {
                                     current = Some(Node::HistoryEvent(new_config.clone(), event_id + 1));
                                     if !seen.insert(current.clone()) {
+                                        println!("Already seen");
                                         current = None;
                                     }
                                 } else {
@@ -159,6 +164,7 @@ impl<C: Sync + Send, S: Clone + Hash + Eq, Ret: Send + Eq + Hash + Copy> Lineari
 #[derive(Eq)]
 #[derive(PartialEq)]
 #[derive(Clone)]
+#[derive(Debug)]
 enum Node<Seq: Hash + Eq + Clone, Ret: Eq + Hash + Copy> {
     HistoryEvent(Configuration<Seq, Ret>, usize),
     LinAttempt(Configuration<Seq, Ret>, usize, usize, usize)

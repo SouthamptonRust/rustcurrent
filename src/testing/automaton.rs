@@ -1,9 +1,12 @@
 use std::hash::{Hash, Hasher};
+use std::fmt::{Debug, Formatter};
+use std::fmt;
 
 use super::time_stamped::{InvokeEvent, ReturnEvent};
 
 #[derive(Eq)]
 #[derive(Clone)]
+#[derive(Debug)]
 pub struct Configuration<Seq: Hash + Eq + Clone, Ret: Eq + Copy> {
     sequential: Seq,
     states: StatesWrapper<Seq, Ret>
@@ -99,9 +102,19 @@ impl<Seq: Hash + Eq + Clone, Ret: Eq + Copy> PartialEq for Configuration<Seq, Re
 
 #[derive(Eq)]
 #[derive(PartialEq)]
-#[derive(Hash)]
+#[derive(Debug)]
 pub struct StatesWrapper<Seq: Eq, Ret: Eq + Copy> {
     states: Vec<ThreadState<Seq, Ret>>
+}
+
+impl<Seq: Eq + Hash, Ret: Eq + Copy + Hash> Hash for StatesWrapper<Seq, Ret> {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        let hash = 0x3c074a61;
+        for state in &self.states {
+            hash.hash(h);
+            state.hash(h);
+        }
+    }
 }
 
 impl<Seq: Eq, Ret: Eq + Copy> StatesWrapper<Seq, Ret> {
@@ -165,6 +178,18 @@ pub enum ThreadState<Seq, Ret: Copy> {
     Returned
 }
 
+impl<Seq, Ret: Eq + Copy + Debug> Debug for ThreadState<Seq, Ret> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        use self::ThreadState::*;
+
+        match self {
+            &Called(ref msg, _, res, arg) => write!(f, "Called({:?} with {:?} to make {:?})", msg, arg, res),
+            &Linearized(res) => write!(f, "Linearized to {:?}", res),
+            &Returned => write!(f, "Returned")
+        }
+    }
+}
+
 impl<Seq: Eq, Ret: Eq + Copy> Eq for ThreadState<Seq, Ret> {}
 
 impl<Seq: Eq, Ret: Eq + Copy> PartialEq for ThreadState<Seq, Ret> {
@@ -209,5 +234,46 @@ impl<Seq: Eq + Hash, Ret: Eq + Hash + Copy> Hash for ThreadState<Seq, Ret> {
             &Linearized(ref res) => { "Linearized".to_owned().hash(h); res.hash(h) },
             &Returned => { "Returned".to_owned().hash(h) }
         }
+    }
+}
+
+mod tests {
+    extern crate im;
+    use self::im::Vector;
+
+    use std::hash::{Hash, Hasher, BuildHasher};
+    use std::collections::hash_map::RandomState;
+    
+    use super::{Configuration, ThreadState};
+    use super::super::time_stamped::InvokeEvent;
+
+    #[test]
+    #[ignore]
+    fn test_hashing() {
+        let mut config: Configuration<Vector<usize>, usize> = Configuration::new(Vector::new(), 3);
+
+        config.states.states[1] = ThreadState::Linearized(Some(41));
+
+        let new_config = config.try_return(1);
+        let new_new_config = new_config.clone();
+
+        println!("{:?}", config);
+        println!("{:?}", new_config);
+
+        let state = RandomState::new();                
+        let mut hasher = state.build_hasher();
+
+        config.hash(&mut hasher);
+        let hash1 = hasher.finish();
+
+        hasher = state.build_hasher();
+        new_config.hash(&mut hasher);
+        let hash2 = hasher.finish();
+
+        hasher = state.build_hasher();
+        new_config.hash(&mut hasher);
+        let hash3 = hasher.finish();
+
+        println!("hash1 {} -- hash2 {} -- hash3 {}", hash1, hash2, hash3);
     }
 }

@@ -534,10 +534,10 @@ mod tests {
 
     #[test]
     fn linearize() {
-        let stack: Stack<usize> = Stack::new(false);
+        let stack: Stack<usize> = Stack::new(true);
         let sequential: Vector<usize> = Vector::new();
         let mut linearizer: LinearizabilityTester<Stack<usize>, Vector<usize>, usize> 
-                = LinearizabilityTester::new(8, 100000, stack, sequential);
+                = LinearizabilityTester::new(8, 1000000, stack, sequential);
 
         fn sequential_pop(stack: &Vector<usize>, val: Option<usize>) -> (Vector<usize>, Option<usize>) {
             match stack.pop_back() {
