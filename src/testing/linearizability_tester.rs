@@ -7,8 +7,8 @@ use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::fmt::Debug;
 
-use super::time_stamped::{TimeStamped, Event, InvokeEvent, ReturnEvent};
-use super::automaton::{Configuration, ThreadState};
+use super::time_stamped::{TimeStamped, Event};
+use super::automaton::{Configuration};
 
 pub struct LinearizabilityTester<C: Sync, S: Clone, Ret: Send + Eq + Hash + Copy>
 {
@@ -142,7 +142,7 @@ impl<C: Sync + Send, S: Clone + Hash + Eq + Debug, Ret: Send + Eq + Hash + Copy 
                                     current = Some(Node::LinAttempt(new_config.clone(), id, id, event_id));
                                 }
                             },
-                            Err(new_result) => {
+                            Err(_) => {
                                 current = if config.can_return(id) && id == start { None } else { next };
                             }
                         }

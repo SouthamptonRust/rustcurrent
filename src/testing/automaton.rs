@@ -2,7 +2,7 @@ use std::hash::{Hash, Hasher};
 use std::fmt::{Debug, Formatter};
 use std::fmt;
 
-use super::time_stamped::{InvokeEvent, ReturnEvent};
+use super::time_stamped::{InvokeEvent};
 
 #[derive(Eq)]
 #[derive(Clone)]
@@ -52,7 +52,7 @@ impl<Seq: Hash + Eq + Clone, Ret: Eq + Copy> Configuration<Seq, Ret> {
                     states: new_states
                 })
             },
-            &ThreadState::Called(ref msg, op, res, arg) => {
+            &ThreadState::Called(_, op, res, arg) => {
                 let (new_seq, new_res) = op(&self.sequential, arg);
                 if new_res == res {
                     let new_states = self.states.make_fire_return(thread_id);
@@ -70,7 +70,7 @@ impl<Seq: Hash + Eq + Clone, Ret: Eq + Copy> Configuration<Seq, Ret> {
 
     pub fn try_linearize(&self, thread_id: usize) -> Result<Configuration<Seq, Ret>, Option<Ret>> {
         match &self.states.states[thread_id] {
-            &ThreadState::Called(ref msg, op, res, arg) => {
+            &ThreadState::Called(_, op, res, arg) => {
                 let (new_seq, new_res) = op(&self.sequential, arg);
                 if new_res == res {
                     let new_states = self.states.make_linearize(thread_id, new_res);
@@ -238,6 +238,7 @@ impl<Seq: Eq + Hash, Ret: Eq + Hash + Copy> Hash for ThreadState<Seq, Ret> {
 }
 
 mod tests {
+    #![allow(unused_imports)]
     extern crate im;
     use self::im::Vector;
 
