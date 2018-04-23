@@ -370,7 +370,7 @@ impl<T: Hash + Send> HashSet<T> {
     fn try_remove(&self, position: &AtomicMarkablePtr<Node<T>>, old: *mut Node<T>) -> Result<Option<T>, *mut Node<T>> {
         match position.compare_exchange(old, ptr::null_mut()) {
             Ok(_) => {
-                let owned = unsafe { ptr::read(old) };
+                let owned = unsafe { ptr::replace(old, Node::Data(DataNode::default())) };
                 if let Node::Data(node) = owned {
                     let data = node.value;
                     self.manager.retire(old, 0);
