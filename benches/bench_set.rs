@@ -198,5 +198,5 @@ fn bench_insert_lock(c: &mut Criterion) {
     c.bench_function_over_inputs("set_insert", |b: &mut Bencher, num_threads: &usize| b.iter(|| set_heavy_insert_lock(*num_threads)), (2..42).filter(|num| num % 2 == 0).collect::<Vec<usize>>());
 }
 
-criterion_group!(benches, bench_insert_lock, bench_insert);
+criterion_group!(benches, bench_insert_lock, bench_insert, bench_typical_lock, bench_typical);
 criterion_main!(benches);

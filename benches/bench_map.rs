@@ -553,44 +553,45 @@ fn bench_typical_all(c: &mut Criterion) {
 }
 
 fn bench_update_lock_all(c: &mut Criterion) {
-    c.bench_function_over_inputs("map_typical_with_updates", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_map_with_updates_lock(*num_threads)), 
+    c.bench_function_over_inputs("map_updates", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_map_with_updates_lock(*num_threads)), 
     (2..42).filter(|num| num % 2 == 0).collect::<Vec<usize>>());
 }
 
 fn bench_update_all(c: &mut Criterion) {
-    c.bench_function_over_inputs("map_typical_with_updates", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_with_updates(*num_threads)), 
+    c.bench_function_over_inputs("map_updates", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_with_updates(*num_threads)), 
     (2..42).filter(|num| num % 2 == 0).collect::<Vec<usize>>());
 }
 
 fn bench_heavy_insert_lock_all(c: &mut Criterion) {
-    c.bench_function_over_inputs("map_heavy_insert", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_heavy_insert_lock(*num_threads)), 
+    c.bench_function_over_inputs("map_insert", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_heavy_insert_lock(*num_threads)), 
     (2..42).filter(|num| num % 2 == 0).collect::<Vec<usize>>());
 }
 
 fn bench_heavy_insert_all(c: &mut Criterion) {
-    c.bench_function_over_inputs("map_heavy_insert", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_heavy_insert(*num_threads)), 
+    c.bench_function_over_inputs("map_insert", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_heavy_insert(*num_threads)), 
     (2..42).filter(|num| num % 2 == 0).collect::<Vec<usize>>());
 }
 
 fn chashmap_bench_equal(c: &mut Criterion) {
-    c.bench_function_over_inputs("chashmap_equal", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_equal_focus_chashmap(*num_threads)), 
+    c.bench_function_over_inputs("map_equal_chashmap", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_equal_focus_chashmap(*num_threads)), 
                                 (2..42).filter(|num| num % 2 == 0).collect::<Vec<usize>>());
 }
 
 fn chashmap_bench_typical(c: &mut Criterion) {
-    c.bench_function_over_inputs("chashmap_typical", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_typical_chashmap(*num_threads)), 
+    c.bench_function_over_inputs("map_typical_chashmap", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_typical_chashmap(*num_threads)), 
                                 (2..42).filter(|num| num % 2 == 0).collect::<Vec<usize>>());
 }
 
 fn chashmap_bench_update(c: &mut Criterion) {
-    c.bench_function_over_inputs("chashmap_updates", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_with_updates_chashmap(*num_threads)), 
+    c.bench_function_over_inputs("map_updates_chashmap", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_with_updates_chashmap(*num_threads)), 
                                 (2..42).filter(|num| num % 2 == 0).collect::<Vec<usize>>());
 }
 
 fn chashmap_bench_insert(c: &mut Criterion) {
-    c.bench_function_over_inputs("chashmap_insert", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_heavy_insert_chashmap(*num_threads)), 
+    c.bench_function_over_inputs("map_insert_chashmap", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_heavy_insert_chashmap(*num_threads)), 
                                 (2..42).filter(|num| num % 2 == 0).collect::<Vec<usize>>());
 }
 
-criterion_group!(benches, chashmap_bench_equal, chashmap_bench_typical, chashmap_bench_update, chashmap_bench_insert);
+criterion_group!(benches, bench_equal_focus_all, bench_equal_focus_all, bench_typical_lock_all, bench_typical_all,
+bench_update_lock_all, bench_update_all, bench_heavy_insert_lock_all, bench_heavy_insert_all);
 criterion_main!(benches);

@@ -342,5 +342,5 @@ fn crossbeam_bench_sp_mc(c: &mut Criterion) {
     c.bench_function_over_inputs("crossbeam_queue_sp_mc", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_sp_mc_crossbeam(*num_threads)), (2..42).filter(|num| num % 2 == 0).collect::<Vec<usize>>());
 }
 
-criterion_group!(benches, crossbeam_bench_equal, crossbeam_bench_mp_sc, crossbeam_bench_sp_mc);
+criterion_group!(benches, bench_queue_equal_lock, bench_queue_equal, bench_queue_mp_sc_lock, bench_queue_mp_sc, bench_queue_sp_mc_lock, bench_queue_sp_mc);
 criterion_main!(benches);

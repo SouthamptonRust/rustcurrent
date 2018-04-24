@@ -212,7 +212,7 @@ fn bench_seg_equal_lock(c: &mut Criterion) {
 }
 
 fn bench_seg_equal(c: &mut Criterion) {
-    c.bench_function_over_inputs("seg_equal", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_equal(*num_threads)),
+    c.bench_function_over_inputs("queue_equal_segment", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_equal(*num_threads)),
                                  (2..42).filter(|num| num % 2 == 0).collect::<Vec<usize>>());
 }
 
@@ -222,7 +222,7 @@ fn bench_seg_mp_sc_lock(c: &mut Criterion) {
 }
 
 fn bench_seg_mp_sc(c: &mut Criterion) {
-    c.bench_function_over_inputs("seg_mp_sc", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_mp_sc(*num_threads)), 
+    c.bench_function_over_inputs("queue_mp_sc_segment", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_mp_sc(*num_threads)), 
                                  (2..42).filter(|num| num % 2 == 0).collect::<Vec<usize>>());
 }
 
@@ -232,7 +232,7 @@ fn bench_seg_sp_mc_lock(c: &mut Criterion) {
 }
 
 fn bench_seg_sp_mc(c: &mut Criterion) {
-    c.bench_function_over_inputs("seg_sp_mc", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_sp_mc(*num_threads)), 
+    c.bench_function_over_inputs("queue_sp_mc_segment", |b: &mut Bencher, num_threads: &usize| b.iter(|| bench_sp_mc(*num_threads)), 
                                  (2..42).filter(|num| num % 2 == 0).collect::<Vec<usize>>());
 }
 
