@@ -317,10 +317,11 @@ impl<K: Hash + Send, V: Send> HashMap<K, V> {
                         if data_node.hash == hash {
                             let hp_handle = self.manager.protect_dynamic(atomic_markable::unmark(node_ptr));
                             self.manager.unprotect(0);
-                            if data_node.value.is_none() {
-                                println!("fuck");
+                            return match data_node.value {
+                                None => None, // The node has already been deleted
+                                Some(ref value) => return Some(DataGuard::new(value, hp_handle))
                             }
-                            return Some(DataGuard::new(data_node.value.as_ref().unwrap(), hp_handle));
+                            //return Some(DataGuard::new(data_node.value.as_ref().unwrap(), hp_handle));
                         } else {
                             return None
                         }
@@ -337,10 +338,11 @@ impl<K: Hash + Send, V: Send> HashMap<K, V> {
                     &Node::Data(ref data_node) => {
                         let hp_handle = self.manager.protect_dynamic(atomic_markable::unmark(node_ptr));
                         self.manager.unprotect(0);
-                        if data_node.value.is_none() {
-                            println!("fuck");
+                        return match data_node.value {
+                            None => None, // The node has already been removed
+                            Some(ref value) => return Some(DataGuard::new(value, hp_handle))
                         }
-                        return Some(DataGuard::new(data_node.value.as_ref().unwrap(), hp_handle));
+                        //return Some(DataGuard::new(data_node.value.as_ref().unwrap(), hp_handle));
                     }
                 }
             }

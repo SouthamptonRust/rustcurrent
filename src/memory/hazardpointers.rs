@@ -178,12 +178,9 @@ impl<'a, T: Send> HPBRManager<T> {
             let thread_info_mut = self.get_mut_thread_info();
             for i in thread_info_mut.starting_hazards_num..thread_info_mut.local_hazards.len() {
                 let hp = thread_info_mut.get_mut_hazard_pointer(i);
-                match hp.protected {
-                    None => {
-                        hp.protect(record);
-                        return HPHandle::new(i, self)
-                    },
-                    Some(_) => {}
+                if !hp.protected.load(Ordering::Relaxed).is_null() {
+                    hp.protect(record);
+                    return HPHandle::new(i, self)
                 }
             }
             let new_hp = self.allocate_hp();
@@ -196,7 +193,8 @@ impl<'a, T: Send> HPBRManager<T> {
         unsafe {
             let thread_info_mut = self.get_mut_thread_info();
             let hp = thread_info_mut.get_mut_hazard_pointer(hp_handle.index);
-            if let Some(ptr) = hp.protected {
+            let ptr = hp.protected.load(Ordering::Relaxed);
+            if !ptr.is_null() {
                 self.retire(ptr, hp_handle.index);
             }
         }
@@ -244,7 +242,8 @@ impl<'a, T: Send> HPBRManager<T> {
         while !ptr::eq(current, ptr::null()) {
             unsafe {
                 let hazard_pointer = &*current;
-                if let Some(ptr) = hazard_pointer.protected {
+                let ptr = hazard_pointer.protected.load(Ordering::Acquire);
+                if !ptr.is_null() {
                     hazard_set.insert(ptr);
                 }
                 current = hazard_pointer.next.load(Ordering::Relaxed);
@@ -315,7 +314,7 @@ impl<'a, T: Send> Drop for HPHandle<'a, T> {
 }
 
 struct HazardPointer<T: Send> {
-    protected: Option<*mut T>,
+    protected: AtomicPtr<T>,
     next: AtomicPtr<HazardPointer<T>>,
     active: AtomicBool
 }
@@ -330,18 +329,18 @@ impl<T: Send> Drop for HazardPointer<T> {
 impl<T: Send> HazardPointer<T> {
     fn new() -> Self {
         HazardPointer {
-            protected: None,
+            protected: AtomicPtr::default(),
             next: AtomicPtr::default(),
             active: AtomicBool::new(false)
         }
     }
 
     fn protect(&mut self, record: *mut T) {
-        self.protected = Some(record);
+        self.protected.store(record, Ordering::Release);
     }
 
     fn unprotect(&mut self) {
-        self.protected = None;
+        self.protected.store(ptr::null_mut(), Ordering::Release);
     }
 
     fn activate(&self) -> bool {
@@ -351,13 +350,13 @@ impl<T: Send> HazardPointer<T> {
 
 impl<T: Send + Debug> Debug for HazardPointer<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let val_string = match self.protected {
-            None => format!("protected: None"),
-            Some(ptr) => {
-                unsafe {
-                    let val = &*ptr;
-                    format!("protected: {{ Pointer: {:?}, Value: {:?} }}", ptr, val)
-                }
+        let ptr = self.protected.load(Ordering::Relaxed);
+        let val_string = if !ptr.is_null() {
+            format!("protected: None")
+        } else {
+            unsafe {
+                let val = &*ptr;
+                format!("protected: {{ Pointer: {:?}, Value: {:?} }}", ptr, val)
             }
         };
 
