@@ -1,5 +1,5 @@
 use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering::{Acquire, Release, Relaxed, SeqCst};
+use std::sync::atomic::Ordering::{Acquire, Release, Relaxed};
 use std::marker::PhantomData;
 
 pub fn is_marked<T>(ptr: *mut T) -> bool {
