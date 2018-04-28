@@ -10,6 +10,9 @@ use std::fmt::Debug;
 use super::time_stamped::{TimeStamped, Event};
 use super::automaton::{Configuration};
 
+/// The main interaction point with the linearizability testing system. This struct
+/// is in charge of running the worker function and then solving for a sequential ordering
+/// afterwards.
 pub struct LinearizabilityTester<C: Sync, S: Clone, Ret: Send + Eq + Hash + Copy>
 {
     num_threads: usize,
@@ -21,6 +24,8 @@ pub struct LinearizabilityTester<C: Sync, S: Clone, Ret: Send + Eq + Hash + Copy
 
 impl<C: Sync + Send, S: Clone + Hash + Eq + Debug, Ret: Send + Eq + Hash + Copy + Debug> LinearizabilityTester<C, S, Ret> 
 {
+    /// Create a new LinearizabilityTester with a number of threads, a number of maximum solving
+    /// iterations, a concurrent data structure to test and a reference immutable sequential data structure.
     pub fn new(num_threads: usize, iterations: usize, concurrent: C, sequential: S) -> Self {
         Self {
             num_threads,
@@ -31,6 +36,8 @@ impl<C: Sync + Send, S: Clone + Hash + Eq + Debug, Ret: Send + Eq + Hash + Copy 
         }   
     }
 
+    /// Run the LinearizabilityTester with the defined worker function, collect the results and solve.
+    /// Returns the result of the solver - Success, Failure, or TimedOut.
     pub fn run(&mut self, worker: fn(usize, &mut ThreadLog<C, S, Ret>) -> ()) -> LinearizabilityResult {
         let num_threads = self.num_threads;
         let arc = self.concurrent.clone();
@@ -180,7 +187,7 @@ impl<Seq: Hash + Eq + Clone, Ret: Eq + Hash + Copy> Hash for Node<Seq, Ret> {
     }
 }
 
-pub struct LogsWrapper<C: Sync, Seq, Ret: Send> {
+struct LogsWrapper<C: Sync, Seq, Ret: Send> {
     logs: UnsafeCell<Vec<ThreadLog<C, Seq, Ret>>>
 }
 
@@ -208,6 +215,8 @@ impl<C: Sync, Seq, Ret: Send + Copy> LogsWrapper<C, Seq, Ret> {
 
 unsafe impl<C: Sync, Seq, Ret: Send> Sync for LogsWrapper<C, Seq, Ret> {} 
 
+/// A nanosecond resolution log of all logged events on the concurrent object for one thread.
+/// The worker function should use this to call methods on the concurrent data structure.
 pub struct ThreadLog<C: Sync, Seq, Ret: Send> {
     id: usize,
     concurrent: Arc<C>,
@@ -223,6 +232,7 @@ impl<C: Sync, Seq, Ret: Send + Copy> ThreadLog<C, Seq, Ret> {
         }
     }
 
+    /// Log an operation on the concurrent object which does not have any arguments.
     pub fn log<F>(&mut self, id: usize, conc_method: F, message: String, seq_method: fn(&Seq, Option<Ret>) -> (Seq, Option<Ret>))
     where F: Fn(&C) -> Option<Ret>
     {
@@ -239,6 +249,7 @@ impl<C: Sync, Seq, Ret: Send + Copy> ThreadLog<C, Seq, Ret> {
         }
     }
 
+    /// Log an operation on the concurrent object which takes an argument but returns nothing.
     pub fn log_val<F>(&mut self, id: usize, conc_method: F, conc_val: Ret, message: String, seq_method: fn(&Seq, Option<Ret>) -> (Seq, Option<Ret>))
     where F: Fn(&C, Ret) -> ()
     {
@@ -247,6 +258,7 @@ impl<C: Sync, Seq, Ret: Send + Copy> ThreadLog<C, Seq, Ret> {
         self.events.push(TimeStamped::new_return(id, None));
     }
 
+    /// Log an operation on the concurrent object which both takes an argument and returns a value.
     pub fn log_val_result<F>(&mut self, id: usize, conc_method: F, conc_val: Ret, message: String, seq_method: fn(&Seq, Option<Ret>) -> (Seq, Option<Ret>))
     where F: Fn(&C, Ret) -> Option<Ret>
     {
@@ -266,7 +278,7 @@ impl<C: Sync, Seq, Ret: Send + Copy> ThreadLog<C, Seq, Ret> {
         }
     }
 
-    pub fn merge(logs: Vec<Self>) -> Vec<TimeStamped<Seq, Ret>> {
+    fn merge(logs: Vec<Self>) -> Vec<TimeStamped<Seq, Ret>> {
         let mut result_vec = Vec::new();
         for mut log in logs {
             result_vec.append(&mut log.events);
