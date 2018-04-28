@@ -1,7 +1,11 @@
 //! Utilities for testing linearizability of lock-free data structures based on the strategy
-//! defined by Lowe in [Testing for Linearizability](http://www.cs.ox.ac.uk/people/gavin.lowe/LinearizabiltyTesting/paper.pdf). 
-//! This should be done by using the LinearizabilityTester struct and the ThreadLog.
-
+//! defined by Lowe in [Testing for Linearizability](http://www.cs.ox.ac.uk/people/gavin.lowe/LinearizabiltyTesting/paper.pdf).
+//!
+//! The linearizability tester tries to evaluate empirically whether a lock-free data structure is linearizable.
+//! For a data structure to be linearizable, all of its operations must have some point where they can be considered
+//! to have taken place atomically. The ordering of these operations into a history must correspond to a correct
+//! sequential ordering on a reference data type.
+//!
 //! # Example
 //! This is an example of how to use the LinearizabilityTester on a stack. The tester needs
 //! a sequential reference data structure along with operations defined on it to match those on

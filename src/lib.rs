@@ -12,7 +12,7 @@ extern crate rayon;
 
 pub mod structures;
 pub mod memory;
-mod testing;
+pub mod testing;
 
 mod tests {
    
