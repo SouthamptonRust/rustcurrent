@@ -628,7 +628,7 @@ mod tests {
     use super::super::super::super::testing::{LinearizabilityTester, LinearizabilityResult, ThreadLog};
 
     #[test]
-    #[ignore]
+     
     fn test_single_threaded() {
         let set: HashSet<u32> = HashSet::new();
 
@@ -665,7 +665,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
+     
     fn test_intersection_semantics() {
         let set: HashSet<u32> = HashSet::new();
         let other_set: HashSet<u32> = HashSet::new();
@@ -689,7 +689,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
+     
     fn test_union_semantics() {
         let set: HashSet<u32> = HashSet::new();
         let other_set: HashSet<u32> = HashSet::new();
@@ -712,7 +712,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
+     
     fn test_difference_semantics() {
         let set: HashSet<u32> = HashSet::new();
         let other_set: HashSet<u32> = HashSet::new();
@@ -739,7 +739,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
+     
     fn test_multithreaded_iteration() {
         // Goal here is to test for memory safety, should be protected from segfaults
         let set: HashSet<u32> = HashSet::new();
@@ -778,7 +778,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
+     
     fn stress_test() {
         let set_arc = Arc::new(HashSet::new());
         let mut wait_vec = Vec::new();

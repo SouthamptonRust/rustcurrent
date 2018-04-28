@@ -220,7 +220,7 @@ mod tests {
     use super::super::super::testing::linearizability_tester::{LinearizabilityTester, LinearizabilityResult, ThreadLog};
 
     #[test]
-    #[ignore]
+     
     fn test_queue_single_threaded() {
         let mut queue : Queue<u8> = Queue::new();
         queue.enqueue(8);
@@ -244,7 +244,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
+     
     fn test_queue_multithreaded() {
         let mut queue: Arc<Queue<u32>> = Arc::new(Queue::new());
         let mut waitvec: Vec<thread::JoinHandle<()>> = Vec::new();

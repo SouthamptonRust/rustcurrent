@@ -1048,7 +1048,7 @@ mod tests {
     use super::super::super::super::testing::{LinearizabilityTester, LinearizabilityResult, ThreadLog};
 
     #[test]
-    #[ignore]
+     
     fn test_data_guard() {
         let map: HashMap<u8, u8> = HashMap::new();
 
@@ -1067,7 +1067,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
+     
     fn test_single_thread_semantics() {
         let map : HashMap<u8, String> = HashMap::new();
 
@@ -1097,7 +1097,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
+     
     fn test_borrow_string_map() {
         let map: HashMap<String, u16> = HashMap::new();
         let _ = map.insert("hello".to_owned(), 8);
@@ -1107,7 +1107,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
+     
     fn test_multithreaded_insert() {
         let map: Arc<HashMap<u16, String>> = Arc::new(HashMap::new());
         let mut wait_vec: Vec<thread::JoinHandle<()>> = Vec::new();

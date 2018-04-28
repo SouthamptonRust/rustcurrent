@@ -249,7 +249,7 @@ mod tests {
     use super::super::time_stamped::InvokeEvent;
 
     #[test]
-    #[ignore]
+     
     fn test_hashing() {
         let mut config: Configuration<Vector<usize>, usize> = Configuration::new(Vector::new(), 3);
 

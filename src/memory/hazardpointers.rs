@@ -430,7 +430,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
+     
     fn test_add_hp() {
         let mut manager : HPBRManager<Foo> = HPBRManager::new(100, 2);
         let test_pointer_one = Box::into_raw(Box::new(Foo {data: 32}));

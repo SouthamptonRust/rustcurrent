@@ -276,7 +276,7 @@ mod tests {
     use super::super::super::testing::{LinearizabilityTester, LinearizabilityResult, ThreadLog}; 
 
     #[test]
-    #[ignore]
+     
     fn test_single_threaded() {
         let gen = OrderGenerator::new(12, 32);
 
@@ -286,7 +286,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
+     
     fn test_with_contention() {
         let mut queue: Arc<SegQueue<u16>> = Arc::new(SegQueue::new(32));
         

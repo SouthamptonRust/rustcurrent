@@ -485,7 +485,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
+     
     fn test_thread_id() {
         let threadid = thread::current().id();
         let num_id = get_id();
@@ -495,7 +495,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
+     
     fn stress_test_elimination() {
         let stack: Arc<Stack<u8>> = Arc::new(Stack::new(true));
         let mut waitvec: Vec<thread::JoinHandle<()>> = Vec::new();
