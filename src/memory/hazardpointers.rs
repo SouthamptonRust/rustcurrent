@@ -28,6 +28,10 @@ use std::mem;
 /// If a thread is exiting the structure for good, it can call the `unprotect` function
 /// to clear one of its hazard pointers. This stops the resources it was protecting
 /// from never being freed.
+/// 
+/// Hazard pointers can also be obtained in the form of an HPHandle, which represents temporary ownership
+/// of a dynamiclly allocated hazard pointer. When the HPHandle goes out of scope, the data is unprotected.
+/// HPHandles can also be explicitly returned to the manager to retire the protected data.
 ///
 /// Since deletion is performed by each thread individually, it is impossible for a panicking
 /// thread to lock up the entire memory manager. This guarantees that even if a thread panics,
@@ -173,6 +177,15 @@ impl<'a, T: Send> HPBRManager<T> {
         }
     }
     
+    /// Protect a record inside a non-default allocated hazard pointer. If none are found, a new
+    /// hazard pointer is allocated in a lock-free manner. Returns a HPHandle, representing the lifetime
+    /// of the protection.
+    /// # Examples
+    /// ```
+    /// let manager = HPBRManager::new(100, 1);
+    /// let handle = manager.protect_dynamic(Box::into_raw(Box::new(8u8)));
+    /// // Handle goes out of scope here and unprotects the pointer
+    /// ```
     pub fn protect_dynamic(&'a self, record: *mut T) -> HPHandle<'a, T> {
         unsafe {
             let thread_info_mut = self.get_mut_thread_info();
@@ -189,6 +202,13 @@ impl<'a, T: Send> HPBRManager<T> {
         }
     }
 
+    /// Retire a record that was protected inside a HPHandle.
+    /// # Examples
+    /// ```
+    /// let manager = HPBRManager::new(100, 1);
+    /// let handle = manager.protect_dynamic(Box::into_raw(Box::new(8u8)));
+    /// manager.retire_dynamic(handle); // The pointer is retired here
+    /// ```
     pub fn retire_dynamic(&self, hp_handle: HPHandle<T>) {
         unsafe {
             let thread_info_mut = self.get_mut_thread_info();
@@ -293,6 +313,8 @@ impl<'a, T: Send> HPBRManager<T> {
     }
 }
 
+/// A struct that represents the life time of a record protected with a dynamically allocated
+/// hazard pointer. When it goes out of scope, it unprotects the data it protects.
 pub struct HPHandle<'a, T: 'a + Send> {
     index: usize,
     manager: &'a HPBRManager<T>
