@@ -5,6 +5,9 @@ use std::thread;
 use std::time::Duration;
 use rand::{SmallRng, NewRng, Rng};
 use std::cell::UnsafeCell;
+use std::cmp;
+
+const MAX_BACKOFF: u32 = 2048;
 
 /// A lock-free Michael-Scott queue.
 ///
@@ -49,7 +52,7 @@ impl<T: Send> Queue<T> {
             let backoff_time = rng.gen_range(0, max_backoff);
             thread::sleep(Duration::new(0, backoff_time * 10));    
         }
-        max_backoff * 2
+        cmp::min(max_backoff * 2, MAX_BACKOFF)
     }
 
     /// Add a new element to the back of the queue.

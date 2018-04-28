@@ -816,18 +816,26 @@ mod tests {
         let mut wait_vec = Vec::new();
 
         wait_vec.push(thread::spawn(move || {
+            let mut counter = 0;
             for i in set_arc_clone.iter() {
+                counter += 1;
                 thread::sleep(Duration::new(0, *i.data() * 1000));
             }
+            println!("iterated over: {}", counter);
         }));
 
         let set_arc_other = set_arc.clone();
         wait_vec.push(thread::spawn(move || {
+            let mut counter = 0;
             for i in 0..2000 {
                 if i % 2 == 0 {
-                    let _ = set_arc_other.remove(&i);
+                    match set_arc_other.remove(&i) {
+                        Some(_) => counter += 1,
+                        None => {}
+                    }
                 }
             }
+            println!("removed: {}", counter);
         }));
 
         for handle in wait_vec {
