@@ -13,6 +13,34 @@ const CHILD_SIZE: usize = 16;
 const KEY_SIZE: usize = 64;
 const MAX_FAILURES: u64 = 10;
 
+/// A wait-free HashSet based on a tree structure.
+///
+/// This set is an adaptation of the Wait-Free HashMap presented in the paper [A Wait-Free HashMap]
+/// (https://dl.acm.org/citation.cfm?id=3079519) with a few tweaks to make it usable in Rust. The general structure
+/// is unchanged, and follows the tree structure laid out in the paper.
+///
+/// The head of the hashmap is an array of HEAD_SIZE elements, each one can either point to a node 
+/// containing data, or a node containing an array of CHILD_SIZE elements, where CHILD_SIZE is smaller
+/// than HEAD_SIZE. By default, this implementation uses a HEAD_SIZE of 256 and a CHILD_SIZE of 16.
+/// Once a slot contains an array node, it can never be changed, which allows for a number of memory
+/// management guarantees.
+///
+/// Finding whether a value is in the set is as follows:
+///
+/// * The hash is computed from the value. This hash will always be a 64-bit integer, and needs to be unique. 
+/// If two values hash to the same value, only one can be inserted. This should not be a problem in most cases.
+/// * The first `n` bits of the value are used to index into the head array through bitwise AND. 
+/// Here, `n` is defined as `log2(HEAD_SIZE)`.
+/// * If we find a data node, we have found the value, if we find an array node, then we 
+/// shift the hash 'r' bits to the right, where r is `log2(CHILD_SIZE)`. We can use 
+/// this to index into the new array, and continue.
+/// * If we reach a null spot at any point, then the element is not in the array.
+/// * Once we reach the bottom, the full hash will have been used, ensuring correct hashing given unique hashing.
+///
+/// The tree structure is bounded by HEAD_SIZE and CHILD_SIZE, such that 
+/// `max_depth = (hash_size - log2(HEAD_SIZE)) / log2(CHILD_SIZE)`. In this case, 
+/// that means the maximum depth is 14. This is used to justify the implementation of 
+/// recursive destructors: they should not be able to overflow the stack.
 pub struct HashSet<T: Send> {
     head: Vec<AtomicMarkablePtr<Node<T>>>,
     hasher: RandomState,
@@ -22,6 +50,11 @@ pub struct HashSet<T: Send> {
 }
 
 impl<T: Hash + Send> HashSet<T> {
+    /// Construct a new HashSet.
+    /// # Example
+    /// ```
+    /// let set = HashSet::new();
+    /// ```
     pub fn new() -> Self {
         let mut head: Vec<AtomicMarkablePtr<Node<T>>> = Vec::with_capacity(HEAD_SIZE);
         for _ in 0..HEAD_SIZE {
@@ -81,6 +114,13 @@ impl<T: Hash + Send> HashSet<T> {
         }
     }
 
+    /// Insert a new value into the HashSet.
+    /// # Example
+    /// ```
+    /// let set = HashSet::new();
+    /// let _ = set.insert(52);
+    /// assert!(set.contains(&52));
+    /// ```
     pub fn insert(&self, mut data: T) -> Result<(), T> {
         let hash = self.hash(&data);
         let mut mut_hash = hash;
@@ -198,6 +238,13 @@ impl<T: Hash + Send> HashSet<T> {
         }
     }
 
+    /// Returns true if the given value is in the set.
+    /// # Example
+    /// ```
+    /// let set = HashSet::new();
+    /// let _ = set.insert(52);
+    /// assert!(set.contains(&52));
+    /// ```
     pub fn contains<Q: ?Sized>(&self, key: &Q) -> bool
     where T: Borrow<Q>,
           Q: Hash + Send
@@ -274,6 +321,16 @@ impl<T: Hash + Send> HashSet<T> {
         }
     }
 
+    /// Remove the given value from the set. Return the value if removal was successful,
+    /// None otherwise.
+    /// # Example
+    /// ```
+    /// let set = HashSet::new();
+    /// let _ = set.insert(52);
+    /// assert!(set.contains(&52));
+    /// set.remove(&52);
+    /// assert!(!set.contains(&52));
+    /// ```
     pub fn remove<Q: ?Sized>(&self, expected: &Q) -> Option<T> 
     where T: Borrow<Q>,
           Q: Hash + Send
@@ -383,10 +440,14 @@ impl<T: Hash + Send> HashSet<T> {
         }
     }
 
+    /// Retrieve an unordered iterator over the values in the set. The iterator is lazy
+    /// so values can be removed before or after they are reached, but all references
+    /// are guaranteed to be alive.
     pub fn iter(&self) -> Iter<T> {
         Iter::new(&self.head, &self.manager)
     }
 
+    /// Retrieve a lazy iterator for the difference between this HashSet and another.
     pub fn difference<'a>(&'a self, other: &'a Self) -> Difference<'a, T> {
         Difference {
             iter: Iter::new(&self.head, &self.manager),
@@ -394,6 +455,7 @@ impl<T: Hash + Send> HashSet<T> {
         }
     }
 
+    /// Retrieve a lazy iterator over the intersection of this HashSet and another.
     pub fn intersection<'a>(&'a self, other: &'a Self) -> Intersection<'a, T> {
         Intersection {
             iter: Iter::new(&self.head, &self.manager),
@@ -401,6 +463,7 @@ impl<T: Hash + Send> HashSet<T> {
         }
     }
 
+    /// Retrieve a lazy iterator over the union of this set and another.
     pub fn union<'a>(&'a self, other: &'a Self) -> Union<'a, T> {
         Union {
             iter: self.iter().chain(other.difference(self))
