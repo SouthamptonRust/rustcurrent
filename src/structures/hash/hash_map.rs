@@ -238,12 +238,10 @@ impl<K: Hash + Send, V: Send> HashMap<K, V> {
         }
     }
 
-    /// Retrieve a **reference** to the element in the HashMap with the given key. Returns None if
-    /// the element is not inside the map. It is 
-    /// important to note that this is only a reference because if the data is removed by another thread it
-    /// could be deleted. This method guarantees that the reference will be protected for this thread until
-    /// the next map method is called, as it will be stored in a hazard pointer. If the data needs to persist
-    /// for longer than that, it is recommended to use `get_clone`.
+    /// Retrieve a reference to the piece of data associated with the given key, protected by a DataGuard.
+    /// The reference is guaranteed to live for the lifetime of the DataGuard. If no data is found, returns None.
+    /// In a worst-case scenario, this method degrades to lock-free performance. For guaranteed wait-free get, use
+    /// get_clone.
     /// # Panics
     /// If the internal state of the HashMap becomes inconsistent, this method will panic.
     /// # Examples
@@ -663,8 +661,7 @@ impl<K: Hash + Send, V: Send> HashMap<K, V> {
     }
 
     /// Retrieves a clone of the element with the given key, where the clone is created using
-    /// the method defined on the `Clone` trait. This is safer than using the reference get,
-    /// and is essential if values will need to live outside of the map.
+    /// the method defined on the `Clone` trait. This method is guaranteed to be wait-free.
     /// # Panics
     /// This method will panic if the internal state of the HashMap becomes inconsistent.
     /// # Examples
@@ -777,6 +774,7 @@ impl<K: Hash + Send, V: Send> HashMap<K, V> {
         }
     }
 
+    /// Obtain an iterator over values in the HashMap. No ordering is guaranteed.
     pub fn iter(&self) -> Iter<K, V> {
         Iter::new(&self.head, &self.manager)
     }
